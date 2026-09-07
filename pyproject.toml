@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mo2cli"
+version = "0.4.0"
+description = "A safe, scriptable CLI for Mod Organizer 2 profiles and mod lists"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "mo2cli contributors"}]
+dependencies = ["py7zr>=0.22"]
+
+[project.scripts]
+mo2 = "mo2cli.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mo2cli*"]
