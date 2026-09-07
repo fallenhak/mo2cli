@@ -86,9 +86,14 @@ mo2 --instance "D:\Games\ModOrganizer\Skyrim" downloads fetch "https://www.nexus
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods install "nxm://skyrimspecialedition/mods/123/files/456?key=...&expires=..." --nexus-api-key "$env:NEXUS_API_KEY" --allow-fomod
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods install "https://example.test/mod.zip" --name "My Mod" --separator "Gameplay"
 
-# Apply batch manifest (download, install, and arrange separators)
+# Autonomous Nexus download for Free accounts & AI agents (fast-forwards 5s timer)
+mo2 nexus login
+mo2 --instance "D:\Games\ModOrganizer\Skyrim" downloads fetch "https://www.nexusmods.com/skyrimspecialedition/mods/123?tab=files&file_id=456" --auto-download
+mo2 --instance "D:\Games\ModOrganizer\Skyrim" mods install "https://www.nexusmods.com/skyrimspecialedition/mods/123?tab=files&file_id=456" --auto-download --allow-fomod
+
+# Apply batch manifest (download, install, and arrange separators via parallel tabs)
+mo2 --instance "D:\Games\ModOrganizer\Skyrim" manifest apply modlist.json --auto-download
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" manifest apply modlist.json --nexus-api-key "$env:NEXUS_API_KEY" --dry-run
-mo2 --instance "D:\Games\ModOrganizer\Skyrim" manifest apply modlist.json --nexus-api-key "$env:NEXUS_API_KEY"
 
 # Profile Export & Import
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" profiles export Default-profile.zip

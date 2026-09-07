@@ -171,7 +171,17 @@ class NexusClient:
         raise Mo2Error("Nexus download_link API returned no valid URL.")
 
 
-def download_reference(instance: Instance, reference: str | NexusReference, api_key: str | None = None, game: str | None = None, file_name: str | None = None, output: str | None = None, replace: bool = False, expected_sha256: str | None = None) -> dict[str, object]:
+def download_reference(
+    instance: Instance,
+    reference: str | NexusReference,
+    api_key: str | None = None,
+    game: str | None = None,
+    file_name: str | None = None,
+    output: str | None = None,
+    replace: bool = False,
+    expected_sha256: str | None = None,
+    auto_download: bool = False,
+) -> dict[str, object]:
     parsed = reference if isinstance(reference, NexusReference) else parse_reference(reference, instance, game)
     if game:
         parsed = NexusReference(game_domain(instance, game), parsed.mod_id, parsed.file_id, parsed.key, parsed.expires)
@@ -186,7 +196,34 @@ def download_reference(instance: Instance, reference: str | NexusReference, api_
     else:
         file_info = client.choose_file(parsed, file_name)
     file_id = _integer(file_info.get("file_id"), "file id")
-    link = client.download_link(parsed, file_id)
+
+    link: str | None = None
+    if auto_download and not parsed.key:
+        from .browser import resolve_nxm_url
+        page_url = f"https://www.nexusmods.com/{parsed.game}/mods/{parsed.mod_id}?tab=files&file_id={file_id}"
+        resolved = resolve_nxm_url(page_url)
+        if resolved.startswith("http://") or resolved.startswith("https://"):
+            link = resolved
+        else:
+            parsed = parse_reference(resolved, instance, parsed.game)
+
+    if not link:
+        try:
+            link = client.download_link(parsed, file_id)
+        except Mo2Error as err:
+            if ("403" in str(err) or "premium" in str(err).casefold()) and not parsed.key:
+                from .browser import resolve_nxm_url
+                page_url = f"https://www.nexusmods.com/{parsed.game}/mods/{parsed.mod_id}?tab=files&file_id={file_id}"
+                print(f"Direct download link requires Premium. Attempting automated browser resolution for {page_url}...")
+                resolved = resolve_nxm_url(page_url)
+                if resolved.startswith("http://") or resolved.startswith("https://"):
+                    link = resolved
+                else:
+                    parsed = parse_reference(resolved, instance, parsed.game)
+                    link = client.download_link(parsed, file_id)
+            else:
+                raise
+
     archive_name = file_name or file_info.get("file_name") or file_info.get("name") or f"nexus-{parsed.mod_id}-{file_id}.zip"
     result = fetch(instance, link, output or str(archive_name), replace, headers={"User-Agent": f"{APPLICATION_NAME}/{client.application_version}"}, expected_sha256=expected_sha256)
     archive_path = Path(str(result["path"]))

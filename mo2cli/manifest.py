@@ -48,7 +48,16 @@ def _profiles_for_manifest(instance: Instance, profile: str | None, root: dict[s
     return instance.profile_name(str(selected) if selected else None)
 
 
-def apply(instance: Instance, manifest_path: str | Path, profile: str | None = None, nexus_api_key: str | None = None, dry_run: bool = False, replace: bool = False, continue_on_error: bool = False) -> dict[str, object]:
+def apply(
+    instance: Instance,
+    manifest_path: str | Path,
+    profile: str | None = None,
+    nexus_api_key: str | None = None,
+    dry_run: bool = False,
+    replace: bool = False,
+    continue_on_error: bool = False,
+    auto_download: bool = False,
+) -> dict[str, object]:
     source = Path(manifest_path).expanduser().resolve()
     root = load(source)
     selected_profile = _profiles_for_manifest(instance, profile, root)
@@ -89,6 +98,30 @@ def apply(instance: Instance, manifest_path: str | Path, profile: str | None = N
         if isinstance(original, str):
             result["separators"].append(ensure_separator(instance, selected_profile, original))
 
+    resolved_cache: dict[str, str] = {}
+    if auto_download and not dry_run:
+        urls_to_batch: list[str] = []
+        for spec in mod_specs:
+            raw = spec.get("nxm") or spec.get("nexus")
+            if isinstance(raw, str) and ("nexusmods.com" in raw or raw.startswith("nxm://")):
+                if "key=" not in raw:
+                    urls_to_batch.append(raw)
+            elif isinstance(raw, dict):
+                url = raw.get("url")
+                if url and isinstance(url, str) and "key=" not in url:
+                    urls_to_batch.append(url)
+                elif raw.get("mod_id") and raw.get("file_id"):
+                    game = game_domain(instance, raw.get("game"))
+                    urls_to_batch.append(f"https://www.nexusmods.com/{game}/mods/{raw['mod_id']}?tab=files&file_id={raw['file_id']}")
+
+        if len(urls_to_batch) > 1:
+            try:
+                from .browser import batch_resolve_nxm_urls
+                print(f"Pre-resolving {len(urls_to_batch)} Nexus downloads in parallel tabs...")
+                resolved_cache = batch_resolve_nxm_urls(urls_to_batch)
+            except Exception as batch_err:
+                print(f"Batch resolution notice: {batch_err}. Falling back to sequential resolution.")
+
     errors: list[dict[str, object]] = []
     for spec in mod_specs:
         try:
@@ -120,7 +153,23 @@ def apply(instance: Instance, manifest_path: str | Path, profile: str | None = N
                         reference = NexusReference(game, _integer(mod_id, "Nexus mod_id"), _integer(raw_file, "Nexus file_id") if raw_file is not None and str(raw_file).strip().isdigit() else None)
                 else:
                     reference = str(raw_reference)
-                download_result = download_reference(instance, reference, api_key=nexus_api_key, game=nexus.get("game"), file_name=nexus.get("file") if isinstance(nexus.get("file"), str) and not str(nexus.get("file")).isdigit() else None, output=spec.get("output"), replace=bool(spec.get("replace", replace)), expected_sha256=spec.get("sha256"))
+
+                ref_lookup_key = str(reference) if isinstance(reference, str) else f"https://www.nexusmods.com/{reference.game}/mods/{reference.mod_id}?tab=files&file_id={reference.file_id}"
+                if ref_lookup_key in resolved_cache:
+                    cached_url = resolved_cache[ref_lookup_key]
+                    reference = parse_reference(cached_url, instance, getattr(reference, "game", None))
+
+                download_result = download_reference(
+                    instance,
+                    reference,
+                    api_key=nexus_api_key,
+                    game=nexus.get("game"),
+                    file_name=nexus.get("file") if isinstance(nexus.get("file"), str) and not str(nexus.get("file")).isdigit() else None,
+                    output=spec.get("output"),
+                    replace=bool(spec.get("replace", replace)),
+                    expected_sha256=spec.get("sha256"),
+                    auto_download=auto_download,
+                )
                 archive = str(download_result["path"])
             else:
                 raise Mo2Error("Manifest mod entry requires path, url, nxm, or nexus.")
