@@ -77,7 +77,8 @@ def interactive_login() -> None:
             try:
                 cookies = context.cookies(["https://www.nexusmods.com", "https://nexusmods.com", "https://users.nexusmods.com"])
                 cookie_names = {c["name"].lower() for c in cookies}
-                if "nexusmods_session" in cookie_names or "sid_token" in cookie_names or "member_id" in cookie_names:
+                url = page.url.lower()
+                if "sid_token" in cookie_names or "remember_user_token" in cookie_names or "nexusmods_user" in cookie_names or ("users.nexusmods.com" in url and "sign_in" not in url and "auth" not in url):
                     logged_in = True
                     break
             except Exception:
@@ -105,17 +106,15 @@ def resolve_nxm_url(page_url: str, timeout: float = 35.0) -> str:
     if "tab=files" not in target_url and "files/" in target_url:
         parts = target_url.split("files/", 1)
         file_id = parts[1].split("?")[0].split("/")[0]
-        target_url = f"{parts[0]}?tab=files&file_id={file_id}&nmm=1"
-    elif "nmm=1" not in target_url:
-        delimiter = "&" if "?" in target_url else "?"
-        target_url = f"{target_url}{delimiter}nmm=1"
+        target_url = f"{parts[0]}?tab=files&file_id={file_id}"
+    target_url = target_url.replace("&nmm=1", "").replace("?nmm=1", "")
 
     captured_url: str | None = None
 
     with sync_playwright() as p:
         kwargs: dict[str, Any] = {
             "user_data_dir": str(profile_dir),
-            "headless": True,
+            "headless": False,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -177,6 +176,8 @@ def resolve_nxm_url(page_url: str, timeout: float = 35.0) -> str:
                 break
 
             for selector in [
+                ".nxm-button-secondary-filled-weak",
+                "button.nxm-button-secondary-filled-weak",
                 "#slowDownloadButton",
                 "button#slowDownloadButton",
                 "button.btn-slow",
@@ -224,7 +225,7 @@ def batch_resolve_nxm_urls(urls: list[str], concurrency: int = 3, timeout: float
     with sync_playwright() as p:
         kwargs: dict[str, Any] = {
             "user_data_dir": str(profile_dir),
-            "headless": True,
+            "headless": False,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -246,10 +247,8 @@ def batch_resolve_nxm_urls(urls: list[str], concurrency: int = 3, timeout: float
                 if "tab=files" not in target_url and "files/" in target_url:
                     parts = target_url.split("files/", 1)
                     file_id = parts[1].split("?")[0].split("/")[0]
-                    target_url = f"{parts[0]}?tab=files&file_id={file_id}&nmm=1"
-                elif "nmm=1" not in target_url:
-                    delimiter = "&" if "?" in target_url else "?"
-                    target_url = f"{target_url}{delimiter}nmm=1"
+                    target_url = f"{parts[0]}?tab=files&file_id={file_id}"
+                target_url = target_url.replace("&nmm=1", "").replace("?nmm=1", "")
 
                 page = context.new_page()
                 info = {"url": raw_url, "target_url": target_url, "page": page, "captured": None}
@@ -303,11 +302,16 @@ def batch_resolve_nxm_urls(urls: list[str], concurrency: int = 3, timeout: float
                         continue
                     page = item["page"]
                     for selector in [
+                        ".nxm-button-secondary-filled-weak",
+                        "button.nxm-button-secondary-filled-weak",
                         "#slowDownloadButton",
                         "button#slowDownloadButton",
                         "button.btn-slow",
                         "button:has-text('Slow Download')",
                         "a:has-text('Slow Download')",
+                        "button:has-text('Slow download')",
+                        "a:has-text('Slow download')",
+                        "a[data-download-type='slow']",
                     ]:
                         try:
                             element = page.locator(selector).first

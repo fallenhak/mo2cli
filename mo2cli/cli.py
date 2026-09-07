@@ -412,6 +412,12 @@ def _resolve_archive_input(instance: Instance, args: argparse.Namespace) -> tupl
 
 
 def run(args: argparse.Namespace) -> int:
+    if not hasattr(args, "profile"):
+        args.profile = None
+    if not hasattr(args, "instance"):
+        args.instance = None
+    if not hasattr(args, "json"):
+        args.json = False
     command = args.command
     if command == "instance":
         if args.instance_command == "init":
@@ -437,6 +443,12 @@ def run(args: argparse.Namespace) -> int:
         return 0
     if command == "instances":
         _output(list_instances(), args.json)
+        return 0
+    if command == "nexus":
+        if args.nexus_command == "login":
+            from .browser import interactive_login
+
+            interactive_login()
         return 0
     instance = Instance.open(args.instance)
     if command == "undo":
@@ -639,11 +651,6 @@ def run(args: argparse.Namespace) -> int:
                 _output(fetch_download(instance, args.url, args.output, args.replace, expected_sha256=args.sha256), args.json)
     elif command == "manifest":
         _output(apply_manifest(instance, args.path, args.profile, args.nexus_api_key, args.dry_run, args.replace, args.continue_on_error, auto_download=getattr(args, "auto_download", False)), args.json)
-    elif command == "nexus":
-        if args.nexus_command == "login":
-            from .browser import interactive_login
-
-            interactive_login()
     return 0
 
 

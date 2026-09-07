@@ -181,6 +181,7 @@ def download_reference(
     replace: bool = False,
     expected_sha256: str | None = None,
     auto_download: bool = False,
+    direct_url: str | None = None,
 ) -> dict[str, object]:
     parsed = reference if isinstance(reference, NexusReference) else parse_reference(reference, instance, game)
     if game:
@@ -198,7 +199,9 @@ def download_reference(
     file_id = _integer(file_info.get("file_id"), "file id")
 
     link: str | None = None
-    if auto_download and not parsed.key:
+    if direct_url:
+        link = direct_url
+    elif auto_download and not parsed.key:
         from .browser import resolve_nxm_url
         page_url = f"https://www.nexusmods.com/{parsed.game}/mods/{parsed.mod_id}?tab=files&file_id={file_id}"
         resolved = resolve_nxm_url(page_url)
@@ -224,7 +227,14 @@ def download_reference(
             else:
                 raise
 
-    archive_name = file_name or file_info.get("file_name") or file_info.get("name") or f"nexus-{parsed.mod_id}-{file_id}.zip"
+    archive_name = file_name or file_info.get("file_name") or file_info.get("name")
+    if not file_name and link and (link.startswith("http://") or link.startswith("https://")):
+        url_file = Path(urllib.parse.unquote(urllib.parse.urlsplit(link).path)).name
+        if url_file and "." in url_file and not url_file.casefold().endswith((".php", ".html", ".htm")):
+            archive_name = url_file
+    if not archive_name:
+        archive_name = f"nexus-{parsed.mod_id}-{file_id}.zip"
+
     result = fetch(instance, link, output or str(archive_name), replace, headers={"User-Agent": f"{APPLICATION_NAME}/{client.application_version}"}, expected_sha256=expected_sha256)
     archive_path = Path(str(result["path"]))
     stable_url = f"https://www.nexusmods.com/{parsed.game}/mods/{parsed.mod_id}?tab=files&file_id={file_id}"

@@ -154,10 +154,17 @@ def apply(
                 else:
                     reference = str(raw_reference)
 
+                direct_url = None
                 ref_lookup_key = str(reference) if isinstance(reference, str) else f"https://www.nexusmods.com/{reference.game}/mods/{reference.mod_id}?tab=files&file_id={reference.file_id}"
                 if ref_lookup_key in resolved_cache:
                     cached_url = resolved_cache[ref_lookup_key]
-                    reference = parse_reference(cached_url, instance, getattr(reference, "game", None))
+                    if cached_url.startswith("http://") or cached_url.startswith("https://"):
+                        if "nexusmods.com" in cached_url and "/mods/" in cached_url:
+                            reference = parse_reference(cached_url, instance, getattr(reference, "game", None))
+                        else:
+                            direct_url = cached_url
+                    else:
+                        reference = parse_reference(cached_url, instance, getattr(reference, "game", None))
 
                 download_result = download_reference(
                     instance,
@@ -169,6 +176,7 @@ def apply(
                     replace=bool(spec.get("replace", replace)),
                     expected_sha256=spec.get("sha256"),
                     auto_download=auto_download,
+                    direct_url=direct_url,
                 )
                 archive = str(download_result["path"])
             else:
