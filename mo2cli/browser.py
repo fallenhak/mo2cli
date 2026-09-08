@@ -12,11 +12,22 @@ from .workspace import Mo2Error
 
 FAST_FORWARD_SCRIPT = """
 (() => {
+    try {
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    } catch (e) {}
+
     const origSetTimeout = window.setTimeout;
     window.setTimeout = function(callback, delay, ...args) {
-        if (typeof delay === 'number' && delay >= 1000 && delay <= 10000) {
-            delay = 50;
-        }
+        try {
+            const host = window.location.hostname || '';
+            const title = document.title || '';
+            if (host.includes('cloudflare') || title.includes('Bir dakika') || title.includes('Just a moment')) {
+                return origSetTimeout(callback, delay, ...args);
+            }
+            if (host.includes('nexusmods.com') && typeof delay === 'number' && delay >= 1000 && delay <= 10000) {
+                delay = 50;
+            }
+        } catch (e) {}
         return origSetTimeout(callback, delay, ...args);
     };
 })();
@@ -175,6 +186,16 @@ def resolve_nxm_url(page_url: str, timeout: float = 35.0) -> str:
             if captured_url:
                 break
 
+            try:
+                page.evaluate("""() => {
+                    const cb = document.getElementById('CybotCookiebotDialog');
+                    if (cb) cb.remove();
+                    const under = document.getElementById('CybotCookiebotDialogUnderlay');
+                    if (under) under.remove();
+                }""")
+            except Exception:
+                pass
+
             for selector in [
                 ".nxm-button-secondary-filled-weak",
                 "button.nxm-button-secondary-filled-weak",
@@ -301,6 +322,15 @@ def batch_resolve_nxm_urls(urls: list[str], concurrency: int = 3, timeout: float
                     if item["captured"]:
                         continue
                     page = item["page"]
+                    try:
+                        page.evaluate("""() => {
+                            const cb = document.getElementById('CybotCookiebotDialog');
+                            if (cb) cb.remove();
+                            const under = document.getElementById('CybotCookiebotDialogUnderlay');
+                            if (under) under.remove();
+                        }""")
+                    except Exception:
+                        pass
                     for selector in [
                         ".nxm-button-secondary-filled-weak",
                         "button.nxm-button-secondary-filled-weak",
