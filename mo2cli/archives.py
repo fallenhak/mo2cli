@@ -75,6 +75,20 @@ def _seven_zip() -> str | None:
     for command in ("7z", "7zz", "7za"):
         if shutil.which(command):
             return command
+    if os.name == "nt":
+        prog_files = os.environ.get("ProgramFiles", "C:\\Program Files")
+        prog_files_x86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        candidates = [
+            Path(prog_files) / "7-Zip" / "7z.exe",
+            Path(prog_files_x86) / "7-Zip" / "7z.exe",
+            Path(prog_files) / "Black Tree Gaming Ltd" / "Vortex" / "resources" / "app.asar.unpacked" / "node_modules" / "7z-bin" / "win32" / "7z.exe",
+            Path(prog_files) / "NVIDIA Corporation" / "NVIDIA App" / "7z.exe",
+            Path(local_appdata) / "Programs" / "7-Zip" / "7z.exe",
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
     return None
 
 
