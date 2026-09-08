@@ -118,7 +118,9 @@ def resolve_nxm_url(page_url: str, timeout: float = 35.0) -> str:
         parts = target_url.split("files/", 1)
         file_id = parts[1].split("?")[0].split("/")[0]
         target_url = f"{parts[0]}?tab=files&file_id={file_id}"
-    target_url = target_url.replace("&nmm=1", "").replace("?nmm=1", "")
+    if "nmm=1" not in target_url:
+        delimiter = "&" if "?" in target_url else "?"
+        target_url = f"{target_url}{delimiter}nmm=1"
 
     captured_url: str | None = None
 
@@ -269,7 +271,9 @@ def batch_resolve_nxm_urls(urls: list[str], concurrency: int = 3, timeout: float
                     parts = target_url.split("files/", 1)
                     file_id = parts[1].split("?")[0].split("/")[0]
                     target_url = f"{parts[0]}?tab=files&file_id={file_id}"
-                target_url = target_url.replace("&nmm=1", "").replace("?nmm=1", "")
+                if "nmm=1" not in target_url:
+                    delimiter = "&" if "?" in target_url else "?"
+                    target_url = f"{target_url}{delimiter}nmm=1"
 
                 page = context.new_page()
                 info = {"url": raw_url, "target_url": target_url, "page": page, "captured": None}
