@@ -99,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--name")
     install.add_argument("--disabled", action="store_true")
     install.add_argument("--replace", action="store_true")
+    install.add_argument("--merge", action="store_true", help="Merge files into existing mod folder instead of replacing")
     install.add_argument("--allow-fomod", action="store_true")
     install.add_argument("--fomod-select", action="append", metavar="GROUP=PLUGIN[,PLUGIN...]")
     install.add_argument("--fomod-flag", action="append", metavar="KEY=VALUE")
@@ -237,6 +238,10 @@ def build_parser() -> argparse.ArgumentParser:
     dls = downloads.add_subparsers(dest="downloads_command", required=True)
     download_list = dls.add_parser("list")
     download_list.add_argument("--hash", action="store_true")
+    download_sync = dls.add_parser("sync", help="Synchronize downloads installed status with installed mods, tools, and plugins")
+    download_mark = dls.add_parser("mark-installed", help="Mark download archive(s) as installed or uninstalled")
+    download_mark.add_argument("archive", nargs="+", help="Archive filename(s)")
+    download_mark.add_argument("--uninstalled", action="store_true", help="Mark as uninstalled instead")
     download_fetch = dls.add_parser("fetch", help="Download HTTP(S) or NXM URL into downloads folder")
     download_fetch.add_argument("url")
     download_fetch.add_argument("--output")
@@ -564,7 +569,7 @@ def run(args: argparse.Namespace) -> int:
                 if mod_id is not None and file_id is not None:
                     metadata_updates["url"] = f"https://www.nexusmods.com/{download.get('game', 'skyrimspecialedition')}/mods/{mod_id}?tab=files&file_id={file_id}"
                 metadata_updates = {key: value for key, value in metadata_updates.items() if value is not None}
-            result = install_archive(instance, archive, args.profile, args.name, args.disabled, args.replace, args.allow_fomod, args.source, _parse_fomod_selections(args.fomod_select), _parse_key_values(args.fomod_flag, "FOMOD flag"), args.fomod_game_version, args.dry_run, metadata_updates, args.separator, args.fomod_reuse)
+            result = install_archive(instance, archive, args.profile, args.name, args.disabled, args.replace, args.merge, args.allow_fomod, args.source, _parse_fomod_selections(args.fomod_select), _parse_key_values(args.fomod_flag, "FOMOD flag"), args.fomod_game_version, args.dry_run, metadata_updates, args.separator, args.fomod_reuse)
             if download:
                 result["download"] = download
             if args.separator:
@@ -661,6 +666,14 @@ def run(args: argparse.Namespace) -> int:
     elif command == "downloads":
         if args.downloads_command == "list":
             _output(list_downloads(instance, args.hash), args.json)
+        elif args.downloads_command == "sync":
+            from .downloads import sync_downloads
+
+            _output(sync_downloads(instance), args.json)
+        elif args.downloads_command == "mark-installed":
+            from .downloads import mark_installed
+
+            _output(mark_installed(instance, args.archive, installed=not args.uninstalled), args.json)
         else:
             if args.url.casefold().startswith("nxm://") or "nexusmods.com/" in args.url.casefold():
                 _output(download_reference(instance, args.url, args.nexus_api_key, args.game, args.file_name, args.output, args.replace, args.sha256, auto_download=getattr(args, "auto_download", False)), args.json)

@@ -369,6 +369,58 @@ class Instance:
         for required in ("modlist.txt",):
             if not (profile / required).exists():
                 issues.append({"level": "error", "code": "missing-file", "message": required})
+        if self.downloads_dir.is_dir():
+            mod_ids: dict[str, str] = {}
+            for entry in mods.entries:
+                if entry.foreign or not entry.enabled:
+                    continue
+                mdir = self._listed_mod_dir(entry.name)
+                if mdir and mdir.is_dir():
+                    m_meta = mdir / "meta.ini"
+                    if m_meta.is_file():
+                        try:
+                            mdoc = IniDocument.read(m_meta)
+                            mid = mdoc.get("modID", section="General") or mdoc.get("modid", section="General") or mdoc.get("modid")
+                            if mid:
+                                mod_ids[str(mid)] = entry.name
+                        except Exception:
+                            pass
+            if self.mods_dir.is_dir():
+                for mdir in self.mods_dir.iterdir():
+                    if mdir.is_dir() and not mdir.name.casefold().endswith("_separator"):
+                        m_meta = mdir / "meta.ini"
+                        if m_meta.is_file():
+                            try:
+                                mdoc = IniDocument.read(m_meta)
+                                mid = mdoc.get("modID", section="General") or mdoc.get("modid", section="General") or mdoc.get("modid")
+                                if not mid and self.downloads_dir.is_dir():
+                                    inst_file = mdoc.get("installationFile", section="General") or mdoc.get("installationFile")
+                                    if inst_file:
+                                        inst_meta = self.downloads_dir / f"{inst_file}.meta"
+                                        if inst_meta.is_file():
+                                            try:
+                                                inst_sdoc = IniDocument.read(inst_meta)
+                                                mid = inst_sdoc.get("modID", section="General") or inst_sdoc.get("modid", section="General")
+                                            except Exception:
+                                                pass
+                                if mid and str(mid) not in mod_ids:
+                                    mod_ids[str(mid)] = mdir.name
+                            except Exception:
+                                pass
+            for sidecar in self.downloads_dir.glob("*.meta"):
+                try:
+                    sdoc = IniDocument.read(sidecar)
+                    inst = sdoc.get("installed", section="General")
+                    if inst is False or str(inst).strip().lower() == "false":
+                        smid = sdoc.get("modID", section="General") or sdoc.get("modid", section="General")
+                        if smid and str(smid) in mod_ids:
+                            issues.append({
+                                "level": "warning",
+                                "code": "uninstalled-download",
+                                "message": f"{sidecar.name[:-5]} (modID {smid}) belongs to installed mod '{mod_ids[str(smid)]}' but is marked uninstalled",
+                            })
+                except Exception:
+                    pass
         return issues
 
     def json_snapshot(self, requested: str | None = None) -> str:

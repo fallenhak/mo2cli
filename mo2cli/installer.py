@@ -53,19 +53,21 @@ def _metadata_game_name(instance: Instance) -> str:
     return known_names.get(instance.game_name.casefold(), instance.game_name)
 
 
-def _mark_download_installed(archive: Path) -> None:
+def _mark_download_installed(instance: Instance | None, archive: Path) -> None:
     """Keep MO2's Downloads tab in sync with a CLI installation."""
-    meta_path = Path(f"{archive}.meta")
-    if not meta_path.is_file():
-        return
-    try:
-        document = IniDocument.read(meta_path)
-        document.set("installed", True, section="General")
-        document.set("uninstalled", False, section="General")
-        document.write(meta_path)
-    except OSError:
-        # The mod is already installed; a locked sidecar must not roll it back.
-        return
+    candidates = [Path(f"{archive}.meta")]
+    if instance is not None and hasattr(instance, "downloads_dir") and instance.downloads_dir.is_dir():
+        candidates.append(instance.downloads_dir / f"{archive.name}.meta")
+    for meta_path in candidates:
+        if not meta_path.is_file():
+            continue
+        try:
+            document = IniDocument.read(meta_path)
+            document.set("installed", True, section="General")
+            document.set("uninstalled", False, section="General")
+            document.write(meta_path)
+        except OSError:
+            pass
 
 
 def _ask_reuse_fomod(saved: dict[str, Any], selections: dict[str, list[str]], changed: bool, dropped: list[str], context_changed: bool) -> bool:
@@ -175,6 +177,7 @@ def install_archive(
     name: str | None = None,
     disabled: bool = False,
     replace: bool = False,
+    merge: bool = False,
     allow_fomod: bool = False,
     source: str | None = None,
     fomod_selections: dict[str, list[str]] | None = None,
@@ -250,10 +253,10 @@ def install_archive(
         _safe_name(mod_name)
         destination = instance.mods_dir / mod_name
         existing = next((path for path in instance.mods_dir.iterdir() if path.name.casefold() == mod_name.casefold()), None) if instance.mods_dir.exists() else None
-        if existing and not replace:
-            raise Mo2Error(f"Mod already exists: {existing.name}; use --replace to overwrite.")
+        if existing and not replace and not merge:
+            raise Mo2Error(f"Mod already exists: {existing.name}; use --replace or --merge.")
         if dry_run:
-            result: dict[str, object] = {"dry_run": True, "name": mod_name, "archive": str(archive_path), "fomod": has_fomod, "replaced": bool(existing), "enabled": not disabled}
+            result: dict[str, object] = {"dry_run": True, "name": mod_name, "archive": str(archive_path), "fomod": has_fomod, "replaced": bool(existing and replace), "merged": bool(existing and merge), "enabled": not disabled}
             if plan is not None:
                 result["plan"] = public_plan(plan)
                 if decision_payload is not None:
@@ -265,15 +268,17 @@ def install_archive(
         modlist_path = profile_path / "modlist.txt"
         previous_modlist = modlist_path.read_text(encoding="utf-8") if modlist_path.exists() else ""
         if existing:
-            moved_to = _trash_path(instance, existing.name)
-            moved_to.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(existing), str(moved_to))
+            if not merge:
+                moved_to = _trash_path(instance, existing.name)
+                moved_to.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(existing), str(moved_to))
         if plan is not None:
             apply_plan(plan, destination)
         else:
             _copy_tree(root, destination)
         metadata = ModMetadata.read(destination)
-        metadata.update({"installationFile": archive_path.name, "gameName": _metadata_game_name(instance)})
+        if not (existing and merge):
+            metadata.update({"installationFile": archive_path.name, "gameName": _metadata_game_name(instance)})
         if metadata_updates:
             metadata.update(metadata_updates)
         modlist = ModList.read(modlist_path)
@@ -286,20 +291,21 @@ def install_archive(
         from .plugins import sync_plugin_lists
 
         sync_plugin_lists(instance, profile)
-        _mark_download_installed(archive_path)
+        _mark_download_installed(instance, archive_path)
         if decision_payload is not None:
             save_fomod_decision(instance, profile, decision_payload)
         journal_entry = record(instance, "install", destination=str(destination), replaced=str(moved_to) if moved_to else None, profiles=[{"path": str(modlist_path), "content": previous_modlist}])
-        result = {"name": mod_name, "path": str(destination), "archive": str(archive_path), "fomod": has_fomod, "replaced": str(moved_to) if moved_to else None, "enabled": not disabled, "selected": plan.get("selected", []) if plan else None, "journal_id": journal_entry["id"]}
+        result = {"name": mod_name, "path": str(destination), "archive": str(archive_path), "fomod": has_fomod, "replaced": str(moved_to) if moved_to else None, "merged": bool(existing and merge), "enabled": not disabled, "selected": plan.get("selected", []) if plan else None, "journal_id": journal_entry["id"]}
         if decision_payload is not None:
             result["decision"] = decision_payload
         return result
     except Exception:
-        if destination and destination.exists():
+        if destination and destination.exists() and not (existing and merge):
             shutil.rmtree(destination)
         if moved_to and moved_to.exists():
             shutil.move(str(moved_to), str(destination))
         raise
+
     finally:
         extracted.close()
 

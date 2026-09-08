@@ -292,6 +292,23 @@ def _repair_download_sidecar(
         if value not in (None, ""):
             _set_general(document, key, value)
     document.write(sidecar)
+    if mod_id not in (None, "", 0):
+        try:
+            target_mid = int(mod_id)
+            for other_sidecar in instance.downloads_dir.glob("*.meta"):
+                if other_sidecar.name.casefold() == sidecar.name.casefold():
+                    continue
+                try:
+                    other_doc = IniDocument.read(other_sidecar)
+                    other_mid = other_doc.get("modID", section="General") or other_doc.get("modid", section="General")
+                    if other_mid and int(other_mid) == target_mid:
+                        _set_general(other_doc, "installed", True)
+                        _set_general(other_doc, "uninstalled", False)
+                        other_doc.write(other_sidecar)
+                except Exception:
+                    pass
+        except (ValueError, TypeError):
+            pass
     return str(sidecar)
 
 
