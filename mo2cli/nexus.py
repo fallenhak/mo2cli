@@ -102,9 +102,9 @@ def resolve_api_key(explicit: str | None = None) -> str | None:
     key_file = Path.home() / ".mo2cli" / "nexus_api_key.txt"
     if key_file.is_file():
         try:
-            val = key_file.read_text(encoding="utf-8").strip()
+            val = key_file.read_text(encoding="utf-8-sig").strip()
             if val:
-                return val
+                return val.lstrip("\ufeff").strip()
         except Exception:
             pass
     if os.name == "nt":
@@ -113,10 +113,11 @@ def resolve_api_key(explicit: str | None = None) -> str | None:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
                 val, _ = winreg.QueryValueEx(key, "NEXUS_API_KEY")
                 if val and str(val).strip():
-                    return str(val).strip()
+                    return str(val).strip().lstrip("\ufeff").strip()
         except Exception:
             pass
-    return os.environ.get("NEXUS_API_KEY")
+    raw_env = os.environ.get("NEXUS_API_KEY")
+    return raw_env.lstrip("\ufeff").strip() if raw_env else None
 
 
 class NexusClient:
