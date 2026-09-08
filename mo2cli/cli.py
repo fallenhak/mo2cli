@@ -262,6 +262,10 @@ def build_parser() -> argparse.ArgumentParser:
     _common(nexus)
     nexus_sub = nexus.add_subparsers(dest="nexus_command", required=True)
     nexus_sub.add_parser("login", help="Log in interactively to Nexus Mods to save session")
+    nexus_files = nexus_sub.add_parser("files", help="List files for a Nexus mod ID")
+    nexus_files.add_argument("mod_id", type=int)
+    nexus_files.add_argument("--game")
+    nexus_files.add_argument("--nexus-api-key")
 
     instance = sub.add_parser("instance", help="Initialize a data-only MO2 instance")
     _common(instance)
@@ -449,6 +453,18 @@ def run(args: argparse.Namespace) -> int:
             from .browser import interactive_login
 
             interactive_login()
+        elif args.nexus_command == "files":
+            from .nexus import NexusClient, game_domain
+            instance = Instance.open(args.instance)
+            client = NexusClient(args.nexus_api_key)
+            game = game_domain(instance, args.game)
+            files = client.files(game, args.mod_id)
+            if args.json:
+                _output(files, True)
+            else:
+                for f in files:
+                    cat = f.get("category_name") or "OTHER"
+                    print(f"[{cat}] file_id={f.get('file_id')} name={f.get('name')} file_name={f.get('file_name')} version={f.get('version')}")
         return 0
     instance = Instance.open(args.instance)
     if command == "undo":
