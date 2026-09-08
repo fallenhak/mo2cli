@@ -17,17 +17,21 @@ from .workspace import Instance, Mo2Error, _safe_name
 
 _GAME_DATA_DIRECTORIES = {
     "calientetools",
+    "distantlod",
     "dyndolod",
     "interface",
     "meshes",
     "music",
+    "nemesis_engine",
     "root",
     "scripts",
     "seq",
+    "shaders",
     "skse",
     "sound",
     "strings",
     "textures",
+    "tools",
     "video",
 }
 
