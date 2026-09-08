@@ -370,12 +370,13 @@ def _parse_fomod_selections(values: list[str] | None) -> dict[str, list[str]]:
         group = group.strip()
         if not group:
             raise Mo2Error(f"FOMOD selection cannot be empty: {value}")
-        if raw_plugins.strip().casefold() in {"none", "__none__"}:
+        if raw_plugins.strip().casefold() in {"__none__", "__empty__"}:
             selections.setdefault(group, [])
             continue
         plugins = [plugin.strip() for plugin in raw_plugins.split(",") if plugin.strip()]
         if not plugins:
-            raise Mo2Error(f"FOMOD selection cannot be empty: {value}")
+            selections.setdefault(group, [])
+            continue
         selections.setdefault(group, []).extend(plugins)
     return selections
 
