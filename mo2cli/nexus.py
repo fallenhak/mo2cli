@@ -96,9 +96,32 @@ def parse_reference(value: str, instance: Instance, explicit_game: str | None = 
         raise Mo2Error("Nexus mod/file IDs must be numeric.") from error
 
 
+def resolve_api_key(explicit: str | None = None) -> str | None:
+    if explicit:
+        return explicit.strip()
+    key_file = Path.home() / ".mo2cli" / "nexus_api_key.txt"
+    if key_file.is_file():
+        try:
+            val = key_file.read_text(encoding="utf-8").strip()
+            if val:
+                return val
+        except Exception:
+            pass
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
+                val, _ = winreg.QueryValueEx(key, "NEXUS_API_KEY")
+                if val and str(val).strip():
+                    return str(val).strip()
+        except Exception:
+            pass
+    return os.environ.get("NEXUS_API_KEY")
+
+
 class NexusClient:
     def __init__(self, api_key: str | None = None, application_version: str = __version__):
-        self.api_key = api_key or os.environ.get("NEXUS_API_KEY")
+        self.api_key = resolve_api_key(api_key)
         self.application_version = application_version
 
     def _request(self, path: str, query: dict[str, str] | None = None) -> Any:
