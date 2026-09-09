@@ -83,3 +83,12 @@ class WorkspaceTests(unittest.TestCase):
         instance.delete_profile("Default")
         with self.assertRaises(Mo2Error):
             instance.delete_profile("Copy")
+
+    def test_instance_open_finds_parent_directory(self):
+        root = self.make_instance()
+        sub_dir = root / "mods" / "SomeMod"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        # Opening from sub_dir should automatically discover the root instance
+        instance = Instance.open(sub_dir)
+        self.assertEqual(instance.root.resolve(), root.resolve())
+

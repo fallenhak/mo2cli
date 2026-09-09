@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -55,9 +56,23 @@ class Instance:
 
     @classmethod
     def open(cls, path: str | Path | None = None) -> "Instance":
-        candidate = Path(path or ".").expanduser().resolve()
+        target = path or os.environ.get("MO2_INSTANCE") or "."
+        candidate = Path(target).expanduser().resolve()
         if candidate.is_file():
             candidate = candidate.parent
+
+        current = candidate
+        while True:
+            ini = current / "ModOrganizer.ini"
+            if not ini.exists():
+                ini = next((p for p in current.glob("*.ini") if p.name.casefold() == "modorganizer.ini"), ini)
+            if ini.exists() or ((current / "profiles").exists() and (current / "mods").exists()):
+                candidate = current
+                break
+            if current.parent == current:
+                break
+            current = current.parent
+
         ini = candidate / "ModOrganizer.ini"
         if not ini.exists():
             ini = next((p for p in candidate.glob("*.ini") if p.name.casefold() == "modorganizer.ini"), ini)

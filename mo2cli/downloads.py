@@ -45,6 +45,15 @@ def fetch(instance: Instance, url: str, output: str | None = None, replace: bool
         if expected_sha256 and digest.casefold() != expected_sha256.casefold():
             raise Mo2Error(f"SHA-256 verification failed: expected {expected_sha256}, got {digest}")
         temporary.replace(target)
+        meta_target = target.with_name(target.name + ".meta")
+        meta_doc = IniDocument.read(meta_target) if meta_target.is_file() else IniDocument()
+        meta_doc.set("url", url, section="General")
+        meta_doc.set("name", target.name, section="General")
+        if meta_doc.get("installed", section="General") is None:
+            meta_doc.set("installed", False, section="General")
+        if meta_doc.get("uninstalled", section="General") is None:
+            meta_doc.set("uninstalled", True, section="General")
+        meta_doc.write(meta_target)
     finally:
         if temporary.exists():
             temporary.unlink()

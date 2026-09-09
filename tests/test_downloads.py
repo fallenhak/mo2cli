@@ -149,3 +149,32 @@ class DownloadTests(unittest.TestCase):
         doc = IniDocument.read(self.instance.downloads_dir / f"{update_arch.name}.meta")
         self.assertTrue(doc.get("installed", section="General"))
         self.assertFalse(doc.get("uninstalled", section="General"))
+
+    def test_fetch_creates_meta_with_url(self):
+        import io
+        from unittest.mock import patch
+        from mo2cli.downloads import fetch
+
+        dummy_bytes = b"sample_archive_content"
+        url = "https://github.com/rfortier/JContainers-rwf/releases/download/v4.2.13.2/JContainers64.7z"
+
+        class DummyResponse:
+            def __enter__(self):
+                return io.BytesIO(dummy_bytes)
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        with patch("urllib.request.urlopen", return_value=DummyResponse()):
+            result = fetch(self.instance, url)
+
+        target = Path(result["path"])
+        self.assertTrue(target.is_file())
+        meta_target = target.with_name(target.name + ".meta")
+        self.assertTrue(meta_target.is_file())
+
+        doc = IniDocument.read(meta_target)
+        self.assertEqual(doc.get("url", section="General"), url)
+        self.assertEqual(doc.get("name", section="General"), target.name)
+        self.assertFalse(doc.get("installed", section="General"))
+        self.assertTrue(doc.get("uninstalled", section="General"))
+
