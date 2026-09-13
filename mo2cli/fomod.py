@@ -8,7 +8,6 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from .archives import extract_to_temp
 from .workspace import Instance, Mo2Error
@@ -28,14 +27,14 @@ def _first(node: ET.Element, name: str) -> ET.Element | None:
     return next(iter(_children(node, name)), None)
 
 
-def _version(value: str) -> tuple[tuple[int, Any], ...]:
-    parts: list[tuple[int, Any]] = []
-    for token in re.split(r"[.\-_+ ]+", value.strip()):
-        if token.isdigit():
-            parts.append((0, int(token)))
-        elif token:
-            parts.append((1, token.casefold()))
-    return tuple(parts)
+def _version(value: str) -> tuple[int, int, int, int]:
+    """Parse versions like MO2's FOMOD installer: four zero-padded integers."""
+    parts: list[int] = []
+    for token in value.strip().split(".")[:4]:
+        match = re.match(r"\d+", token.strip())
+        parts.append(int(match.group()) if match else 0)
+    parts.extend([0] * (4 - len(parts)))
+    return parts[0], parts[1], parts[2], parts[3]
 
 
 @dataclass

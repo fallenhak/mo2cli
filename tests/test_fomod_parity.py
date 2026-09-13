@@ -259,6 +259,13 @@ class FomodParityTests(unittest.TestCase):
 
         valid = plan_archive(archive, game_version="1.6.1170.0", script_extender_version="0.2.2.6")
         self.assertEqual(valid["errors"], [])
+        zero_padded = plan_archive(
+            archive,
+            game_version="1.6.1170",
+            fomm_version="0.13.21",
+            script_extender_version="0.2.2.6",
+        )
+        self.assertEqual(zero_padded["errors"], [])
         invalid = plan_archive(archive, game_version="1.5.97.0", script_extender_version="0.2.2.6")
         self.assertIn("Module dependencies are not satisfied", invalid["errors"])
 
