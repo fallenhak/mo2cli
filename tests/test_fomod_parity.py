@@ -181,6 +181,27 @@ class FomodParityTests(unittest.TestCase):
         self.assertEqual(set(plan["selected"]), {"One", "Two"})
         self.assertIn("Main/Broken: exactly one selection required", plan["errors"])
 
+    def test_mo2_default_selection_semantics_are_reproduced(self):
+        def plugin(name: str, kind: str) -> str:
+            return f'<plugin name="{name}"><typeDescriptor><type name="{kind}" /></typeDescriptor><files><file source="{name}.txt" /></files></plugin>'
+
+        config = f'''<config><installSteps><installStep name="Main"><optionalFileGroups order="Explicit">
+  <group name="Exactly" type="SelectExactlyOne"><plugins order="Explicit">{plugin("Optional First", "Optional")}{plugin("Optional Second", "Optional")}</plugins></group>
+  <group name="At Least" type="SelectAtLeastOne"><plugins order="Explicit">{plugin("Recommended First", "Recommended")}{plugin("Recommended Second", "Recommended")}</plugins></group>
+  <group name="Any" type="SelectAny"><plugins order="Explicit">{plugin("Any First", "Recommended")}{plugin("Any Second", "Recommended")}</plugins></group>
+  <group name="At Most" type="SelectAtMostOne"><plugins order="Explicit">{plugin("Radio First", "Recommended")}{plugin("Radio Last", "Recommended")}</plugins></group>
+</optionalFileGroups></installStep></installSteps></config>'''
+        names = ["Optional First", "Optional Second", "Recommended First", "Recommended Second", "Any First", "Any Second", "Radio First", "Radio Last"]
+        archive = self.make_archive(config, {f"{name}.txt": name.encode() for name in names})
+
+        plan = plan_archive(archive)
+
+        self.assertEqual(plan["errors"], [])
+        self.assertEqual(plan["selections"]["Main/Exactly"], ["Optional First"])
+        self.assertEqual(plan["selections"]["Main/At Least"], ["Recommended First"])
+        self.assertEqual(plan["selections"]["Main/Any"], ["Any First", "Any Second"])
+        self.assertEqual(plan["selections"]["Main/At Most"], ["Radio Last"])
+
     def test_fomod_plus_hidden_selected_records_are_reported_but_not_compared(self):
         config = '''<config><installSteps order="Explicit">
   <installStep name="Hidden"><visible><flagDependency flag="show" value="yes" /></visible><optionalFileGroups>

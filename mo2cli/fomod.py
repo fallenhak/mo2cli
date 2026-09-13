@@ -481,16 +481,25 @@ def plan_extracted(
                 chosen_names = set(requested) | set(required_names)
             else:
                 recommended_names = [plugin.attrib.get("name", "") for plugin in available if plugin_types[plugin.attrib.get("name", "")] == "Recommended"]
+                optional_names = [plugin.attrib.get("name", "") for plugin in available if plugin_types[plugin.attrib.get("name", "")] == "Optional"]
+                could_be_names = [plugin.attrib.get("name", "") for plugin in available if plugin_types[plugin.attrib.get("name", "")] == "CouldBeUsable"]
                 chosen_names = set(required_names)
-                if group_type in {"SelectExactlyOne", "SelectAtMostOne"}:
+                if group_type == "SelectAny":
+                    chosen_names.update(recommended_names)
+                elif group_type == "SelectAtMostOne" and not chosen_names:
+                    # MO2 uses auto-exclusive radio buttons here. Repeatedly
+                    # checking recommended controls leaves the last one active.
+                    chosen_names = set(recommended_names[-1:])
+                elif group_type in {"SelectExactlyOne", "SelectAtLeastOne"} and not chosen_names:
+                    # MO2 checks the first recommended entry for mandatory
+                    # groups, then falls back to the first Optional and finally
+                    # the first CouldBeUsable entry.
+                    chosen_names = set(recommended_names[:1] or optional_names[:1] or could_be_names[:1])
+                elif group_type in {"SelectExactlyOne", "SelectAtMostOne"}:
                     # Never discard a Required option merely to make a malformed
                     # group satisfy its cardinality. Keep every requirement and
                     # let validation fail closed when the XML is contradictory.
-                    chosen_names = set(required_names or recommended_names[:1])
-                elif not chosen_names:
-                    chosen_names = set(recommended_names)
-                if group_type in {"SelectExactlyOne", "SelectAtLeastOne"} and not chosen_names and len(available) == 1:
-                    chosen_names = {available[0].attrib.get("name", "")}
+                    chosen_names = set(required_names)
             chosen = [plugin for plugin in plugin_nodes if plugin.attrib.get("name", "") in chosen_names and plugin_types[plugin.attrib.get("name", "")] != "NotUsable"]
             selection_key = f"{step_key}/{group_name}"
             if group_seen[group_name] > 1:
