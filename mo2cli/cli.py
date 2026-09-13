@@ -18,7 +18,7 @@ from .fomod import inspect_archive as inspect_fomod
 from .fomod_decisions import list_decisions
 from .instance import initialize
 from .instances import list_instances
-from .plugins import analyze as analyze_plugins, catalog as plugin_catalog, remove_plugin_entries, sync_plugin_lists
+from .plugins import analyze as analyze_plugins, catalog as plugin_catalog, ordered_entries as ordered_plugin_entries, remove_plugin_entries, sync_plugin_lists
 from .profiles import export_profile, import_profile
 from .nexus import download_reference
 from .metadata import sync_metadata
@@ -585,12 +585,10 @@ def run(args: argparse.Namespace) -> int:
             result = rename_mod(instance, args.old, args.new)
             _output(result, args.json)
         elif command == "plugins" and args.plugins_command == "list":
-            path, enabled_list = _names(args, instance, "plugins")
-            order_list = PluginList.read(path / "loadorder.txt")
-            enabled = {entry.name.casefold(): entry.enabled for entry in enabled_list.entries}
-            ordered_names = [entry.name for entry in order_list.entries]
-            ordered_names += [entry.name for entry in enabled_list.entries if entry.name.casefold() not in {name.casefold() for name in ordered_names}]
-            data = [{"index": i, "name": name, "enabled": enabled.get(name.casefold(), False)} for i, name in enumerate(ordered_names)]
+            data = [
+                {"index": index, "name": entry.name, "enabled": entry.enabled}
+                for index, entry in enumerate(ordered_plugin_entries(instance, args.profile))
+            ]
             _output(data, args.json)
         elif command == "plugins" and args.plugins_command == "check":
             issues = analyze_plugins(instance, args.profile)

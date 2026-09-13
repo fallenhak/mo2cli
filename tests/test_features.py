@@ -1,3 +1,4 @@
+import io
 import json
 import struct
 import tempfile
@@ -302,6 +303,37 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(test_plugin["form_version"], 44)
         issues = analyze_plugins(self.instance, "Default")
         self.assertTrue(any(issue["code"] == "missing-master" for issue in issues))
+
+    def test_loadorder_only_plugins_are_implicitly_enabled(self):
+        profile = self.root / "profiles" / "Default"
+        (profile / "loadorder.txt").write_text(
+            "Skyrim.esm\nUpdate.esm\nPatch.esp\nDisabled.esp\n",
+            encoding="utf-8",
+        )
+        (profile / "plugins.txt").write_text(
+            "*Patch.esp\nDisabled.esp\n",
+            encoding="utf-8",
+        )
+
+        states = {item["name"]: item["enabled"] for item in plugin_catalog(self.instance, "Default")}
+
+        self.assertTrue(states["Skyrim.esm"])
+        self.assertTrue(states["Update.esm"])
+        self.assertTrue(states["Patch.esp"])
+        self.assertFalse(states["Disabled.esp"])
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            result = main([
+                "--instance", str(self.root),
+                "--profile", "Default",
+                "--json",
+                "plugins", "list",
+            ])
+        self.assertEqual(result, 0)
+        cli_states = {item["name"]: item["enabled"] for item in json.loads(stdout.getvalue())}
+        self.assertTrue(cli_states["Skyrim.esm"])
+        self.assertFalse(cli_states["Disabled.esp"])
 
     def test_profile_ini_roundtrip(self):
         ini = self.root / "profiles" / "Default" / "Skyrim.ini"

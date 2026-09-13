@@ -161,6 +161,22 @@ def remove_plugin_entries(instance: Instance, profile: str | None, names: list[s
     return {"profile": profile_path.name, "removed": removed, "changed": changed, "backup": str(backup_dir)}
 
 
+def ordered_entries(instance: Instance, profile: str | None = None) -> list[PluginEntry]:
+    """Return plugins in load order with MO2's effective enabled state.
+
+    MO2 omits forced game and Creation Club plugins from plugins.txt while still
+    keeping them in loadorder.txt. A load-order-only entry is therefore enabled;
+    entries present in plugins.txt retain their explicit marker state.
+    """
+    profile_path, _, plugin_list = instance.profile_files(profile)
+    loadorder = PluginList.read(profile_path / "loadorder.txt")
+    explicit = {entry.name.casefold(): entry.enabled for entry in plugin_list.entries}
+    names = [entry.name for entry in loadorder.entries]
+    known = {name.casefold() for name in names}
+    names += [entry.name for entry in plugin_list.entries if entry.name.casefold() not in known]
+    return [PluginEntry(name, explicit.get(name.casefold(), True)) for name in names]
+
+
 def analyze(instance: Instance, profile: str | None = None) -> list[dict[str, object]]:
     profile_path, _, enabled_list = instance.profile_files(profile)
     loadorder = PluginList.read(profile_path / "loadorder.txt")
@@ -216,19 +232,16 @@ def analyze(instance: Instance, profile: str | None = None) -> list[dict[str, ob
 
 
 def catalog(instance: Instance, profile: str | None = None) -> list[dict[str, object]]:
-    profile_path, _, enabled_list = instance.profile_files(profile)
-    loadorder = PluginList.read(profile_path / "loadorder.txt")
-    enabled = {entry.name.casefold(): entry.enabled for entry in enabled_list.entries}
-    order = [entry.name for entry in loadorder.entries]
-    order += [entry.name for entry in enabled_list.entries if entry.name.casefold() not in {name.casefold() for name in order}]
+    entries = ordered_entries(instance, profile)
     files = _active_plugin_files(instance, profile)
     result = []
-    for index, name in enumerate(order):
+    for index, entry in enumerate(entries):
+        name = entry.name
         header = parse_header(files[name.casefold()]) if name.casefold() in files else None
         result.append({
             "index": index,
             "name": name,
-            "enabled": enabled.get(name.casefold(), False),
+            "enabled": entry.enabled,
             "path": str(header.path) if header else None,
             "masters": header.masters if header else [],
             "is_master": header.is_master if header else None,
