@@ -1,3 +1,6 @@
+from contextlib import redirect_stdout
+import io
+import json
 import os
 import tempfile
 import unittest
@@ -5,6 +8,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+from mo2cli.cli import main
 from mo2cli.fomod import compare_fomod_plus, inspect_archive, plan_archive, reconcile_selections, selections_from_fomod_plus
 from mo2cli.workspace import Instance, Mo2Error
 
@@ -163,6 +167,20 @@ class FomodParityTests(unittest.TestCase):
         self.assertEqual(plan["errors"], [])
         self.assertEqual(set(plan["selected"]), {"One", "Two"})
 
+    def test_contradictory_required_cardinality_fails_without_dropping_requirements(self):
+        config = '''<config><installSteps><installStep name="Main"><optionalFileGroups>
+  <group name="Broken" type="SelectExactlyOne"><plugins>
+    <plugin name="One"><typeDescriptor><type name="Required" /></typeDescriptor><files><file source="one.txt" /></files></plugin>
+    <plugin name="Two"><typeDescriptor><type name="Required" /></typeDescriptor><files><file source="two.txt" /></files></plugin>
+  </plugins></group>
+</optionalFileGroups></installStep></installSteps></config>'''
+        archive = self.make_archive(config, {"one.txt": b"one", "two.txt": b"two"})
+
+        plan = plan_archive(archive)
+
+        self.assertEqual(set(plan["selected"]), {"One", "Two"})
+        self.assertIn("Main/Broken: exactly one selection required", plan["errors"])
+
     def test_fomod_plus_hidden_selected_records_are_reported_but_not_compared(self):
         config = '''<config><installSteps order="Explicit">
   <installStep name="Hidden"><visible><flagDependency flag="show" value="yes" /></visible><optionalFileGroups>
@@ -248,6 +266,21 @@ class FomodParityTests(unittest.TestCase):
         self.assertEqual(inspected["context"]["game_version"], "1.6.1170.0")
         self.assertEqual(inspected["selected"], ["AE"])
         self.assertEqual(inspected["steps"][0]["groups"][0]["options"][0]["type"], "Recommended")
+
+    def test_archive_fomod_honors_mo2_instance_environment(self):
+        archive = self.make_archive('''<config><installSteps><installStep name="Main"><optionalFileGroups><group name="Context" type="SelectAny"><plugins>
+          <plugin name="Detected"><typeDescriptor><dependencyType><defaultType name="NotUsable" /><patterns><pattern><dependencies><fileDependency file="textures/same.dds" state="Active" /></dependencies><type name="Optional" /></pattern></patterns></dependencyType></typeDescriptor><files><file source="file.txt" /></files></plugin>
+        </plugins></group></optionalFileGroups></installStep></installSteps></config>''', {"file.txt": b"file"})
+        stdout = io.StringIO()
+
+        with patch.dict(os.environ, {"MO2_INSTANCE": str(self.root)}), redirect_stdout(stdout):
+            result = main(["--json", "archive", "fomod", str(archive)])
+
+        self.assertEqual(result, 0)
+        inspected = json.loads(stdout.getvalue())
+        self.assertTrue(inspected["contextual"])
+        self.assertEqual(inspected["context"]["file_states"]["textures/same.dds"], "Active")
+        self.assertTrue(inspected["steps"][0]["groups"][0]["options"][0]["available"])
 
 
 if __name__ == "__main__":

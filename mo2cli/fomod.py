@@ -483,7 +483,10 @@ def plan_extracted(
                 recommended_names = [plugin.attrib.get("name", "") for plugin in available if plugin_types[plugin.attrib.get("name", "")] == "Recommended"]
                 chosen_names = set(required_names)
                 if group_type in {"SelectExactlyOne", "SelectAtMostOne"}:
-                    chosen_names = set(required_names[:1] or recommended_names[:1])
+                    # Never discard a Required option merely to make a malformed
+                    # group satisfy its cardinality. Keep every requirement and
+                    # let validation fail closed when the XML is contradictory.
+                    chosen_names = set(required_names or recommended_names[:1])
                 elif not chosen_names:
                     chosen_names = set(recommended_names)
                 if group_type in {"SelectExactlyOne", "SelectAtLeastOne"} and not chosen_names and len(available) == 1:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -451,7 +452,17 @@ def run(args: argparse.Namespace) -> int:
         elif args.archive_command == "hash":
             print(sha256(path))
         elif args.archive_command == "fomod":
-            context_instance = Instance.open(args.instance) if args.instance else None
+            instance_hint = args.instance or os.environ.get("MO2_INSTANCE")
+            if instance_hint:
+                context_instance = Instance.open(instance_hint)
+            else:
+                # Keep standalone archive inspection usable outside an MO2
+                # directory, while honoring the same parent discovery as the
+                # rest of the CLI when invoked from inside an instance.
+                try:
+                    context_instance = Instance.open(".")
+                except Mo2Error:
+                    context_instance = None
             fomod_plus_record = None
             if args.fomod_plus_db or args.fomod_plus_name:
                 if not args.fomod_plus_db or not args.fomod_plus_name:

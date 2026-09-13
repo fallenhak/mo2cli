@@ -70,6 +70,8 @@ mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods install "
 # Inspect the pages MO2 would show using the profile's game version and
 # Active/Inactive/Missing file state. Stable group keys are returned in `steps`.
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" --json archive fomod "D:\Downloads\fomod-mod.zip"
+# `--instance` may be omitted when MO2_INSTANCE is set or the current directory
+# is inside a discoverable portable instance.
 # Preview an explicit choice without installing it.
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" --json archive fomod "D:\Downloads\fomod-mod.zip" --fomod-select "Main/Variant=Recommended A"
 # Replay and compare a FOMOD Plus record.
