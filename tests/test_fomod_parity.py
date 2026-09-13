@@ -36,6 +36,17 @@ class FomodParityTests(unittest.TestCase):
                 output.writestr(name, content)
         return archive
 
+    def make_raw_config_archive(self, config: bytes, files: dict[str, bytes] | None = None) -> Path:
+        descriptor, name = tempfile.mkstemp(suffix=".zip")
+        os.close(descriptor)
+        archive = Path(name)
+        self.addCleanup(archive.unlink, missing_ok=True)
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("fomod/ModuleConfig.xml", config)
+            for file_name, content in (files or {}).items():
+                output.writestr(file_name, content)
+        return archive
+
     def test_instance_resolves_game_active_and_inactive_file_states(self):
         game = self.root / "Game"
         (game / "Data").mkdir(parents=True)
@@ -91,6 +102,19 @@ class FomodParityTests(unittest.TestCase):
         available = plan_archive(archive, {"Main/Patch": ["Dawnguard Patch"]}, file_states={"Dawnguard.esm": "Active"})
         self.assertEqual(available["errors"], [])
         self.assertEqual(available["selected"], ["Dawnguard Patch"])
+
+    def test_incorrect_xml_encoding_declaration_uses_mo2_fallbacks(self):
+        config = '''<?xml version="1.0" encoding="utf-8"?>
+<config><moduleName>Sköglendi</moduleName><installSteps><installStep name="Main"><optionalFileGroups><group name="Choice" type="SelectExactlyOne"><plugins>
+  <plugin name="Öption"><typeDescriptor><type name="Optional" /></typeDescriptor><files><file source="file.txt" /></files></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps></config>'''.encode("latin-1")
+        archive = self.make_raw_config_archive(config, {"file.txt": b"file"})
+
+        plan = plan_archive(archive)
+
+        self.assertEqual(plan["module_name"], "Sköglendi")
+        self.assertEqual(plan["selected"], ["Öption"])
+        self.assertEqual(plan["errors"], [])
 
     def test_duplicate_group_keys_are_exposed_and_reconciled(self):
         config = '''<config><installSteps order="Explicit"><installStep name="Step"><optionalFileGroups order="Explicit">

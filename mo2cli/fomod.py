@@ -156,20 +156,31 @@ def _find_config(root: Path) -> Path:
 
 
 def _parse_config(config: Path) -> ET.Element:
-    """Parse a FOMOD config, including the nested group layout used by MO2."""
+    """Parse a FOMOD config using MO2-compatible encoding recovery."""
+    raw = config.read_bytes()
     try:
-        raw = config.read_bytes()
-        # A few MO2-compatible installers are UTF-16 files whose XML
-        # declaration incorrectly says encoding="utf-8".  ElementTree trusts
-        # that declaration when parsing from a path, while MO2 detects the
-        # BOM and accepts the file.  Decode BOM-marked XML explicitly so the
-        # CLI follows the same compatibility behaviour.
-        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
-            encoding = "utf-16" if raw.startswith(b"\xff\xfe") else "utf-16-be"
-            return ET.fromstring(raw.decode(encoding))
-        return ET.parse(config).getroot()
-    except ET.ParseError as error:
-        raise Mo2Error(f"Failed to parse FOMOD XML: {error}") from error
+        return ET.fromstring(raw)
+    except ET.ParseError as initial_error:
+        # MO2 retries malformed installers whose XML declaration disagrees
+        # with the actual bytes. Strip that declaration after decoding so
+        # ElementTree does not re-apply the bad encoding claim.
+        candidates = ["utf-16", "utf-8", "latin-1"]
+        if raw.startswith(b"<\x00?\x00"):
+            candidates.insert(0, "utf-16-le")
+        elif raw.startswith(b"\x00<\x00?"):
+            candidates.insert(0, "utf-16-be")
+        for encoding in candidates:
+            try:
+                text = raw.decode(encoding)
+            except UnicodeError:
+                continue
+            text = text.lstrip("\ufeff")
+            text = re.sub(r"^\s*<\?xml[^>]*\?>", "", text, count=1, flags=re.IGNORECASE)
+            try:
+                return ET.fromstring(text)
+            except ET.ParseError:
+                continue
+        raise Mo2Error(f"Failed to parse FOMOD XML: {initial_error}") from initial_error
 
 
 def config_hash(root: Path) -> str:
