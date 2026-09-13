@@ -104,10 +104,12 @@ def create(instance: Instance, profile: str | None, name: str, before: str | Non
             model.add(internal, enabled=True)
             _place(model, internal, before, after)
             write_text(profile_path / "modlist.txt", model.render())
+        entry = record(instance, "separator_create", path=str(path), profiles=backups)
     except Exception:
+        for backup in backups:
+            write_text(Path(backup["path"]), backup["content"])
         shutil.rmtree(path, ignore_errors=True)
         raise
-    entry = record(instance, "separator_create", path=str(path), profiles=backups)
     return {"separator": _display_name(internal), "internal_name": internal, "path": str(path), "profiles": profiles, "journal_id": entry["id"]}
 
 
@@ -128,10 +130,15 @@ def ensure(instance: Instance, profile: str | None, name: str, before: str | Non
         _initialize_metadata(path)
     backup = _backups(instance, [selected])
     actual_internal = path.name if path is not None else internal
-    model.add(actual_internal, enabled=True)
-    _place(model, actual_internal, before, after)
-    write_text(profile_path / "modlist.txt", model.render())
-    entry = record(instance, "separator_create", path=str(path), profiles=backup)
+    try:
+        model.add(actual_internal, enabled=True)
+        _place(model, actual_internal, before, after)
+        write_text(profile_path / "modlist.txt", model.render())
+        entry = record(instance, "separator_create", path=str(path), profiles=backup)
+    except Exception:
+        for item in backup:
+            write_text(Path(item["path"]), item["content"])
+        raise
     return {"separator": _display_name(actual_internal), "internal_name": actual_internal, "path": str(path), "existing": True, "profiles": [selected], "journal_id": entry["id"]}
 
 
@@ -155,20 +162,26 @@ def remove(instance: Instance, profile: str | None, name: str, purge: bool = Fal
         raise Mo2Error(f"Separator not found: {_display_name(internal)}")
     profiles = instance.list_profiles()
     backups = _backups(instance, profiles)
-    trash = None
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    trash = instance.base / ".mo2cli-trash" / f"{path.name}-{stamp}"
+    trash.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(path), str(trash))
+    try:
+        for profile_name in profiles:
+            profile_path = instance.profiles_dir / profile_name
+            model = ModList.read(profile_path / "modlist.txt")
+            model.lines = [line for line in model.lines if not (hasattr(line, "name") and line.name.casefold() == internal.casefold())]
+            write_text(profile_path / "modlist.txt", model.render())
+        entry = record(instance, "separator_remove", reversible=not purge, path=str(instance.mods_dir / internal), trash=str(trash), profiles=backups)
+    except Exception:
+        if trash.exists() and not path.exists():
+            shutil.move(str(trash), str(path))
+        for backup in backups:
+            write_text(Path(backup["path"]), backup["content"])
+        raise
     if purge:
-        shutil.rmtree(path)
-    else:
-        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        trash = instance.base / ".mo2cli-trash" / f"{path.name}-{stamp}"
-        trash.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(path), str(trash))
-    for profile_name in profiles:
-        profile_path = instance.profiles_dir / profile_name
-        model = ModList.read(profile_path / "modlist.txt")
-        model.lines = [line for line in model.lines if not (hasattr(line, "name") and line.name.casefold() == internal.casefold())]
-        write_text(profile_path / "modlist.txt", model.render())
-    entry = record(instance, "separator_remove", reversible=not purge, path=str(instance.mods_dir / internal), trash=str(trash) if trash else None, profiles=backups)
+        shutil.rmtree(trash)
+        trash = None
     return {"removed": _display_name(internal), "internal_name": internal, "purged": purge, "trash": str(trash) if trash else None, "journal_id": entry["id"]}
 
 
@@ -196,6 +209,11 @@ def group(instance: Instance, profile: str | None, separator: str, names: list[s
         current = next(index for index, entry in enumerate(model.entries) if entry.name.casefold() == name.casefold())
         target = separator_index - 1 if current < separator_index else separator_index
         model.move(name, target)
-    write_text(modlist_path, model.render())
-    entry = record(instance, "separator_group", separator=internal, profiles=backup, names=names)
+    try:
+        write_text(modlist_path, model.render())
+        entry = record(instance, "separator_group", separator=internal, profiles=backup, names=names)
+    except Exception:
+        for item in backup:
+            write_text(Path(item["path"]), item["content"])
+        raise
     return {"separator": _display_name(internal), "profile": profile_name, "mods": names, "journal_id": entry["id"]}

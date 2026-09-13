@@ -1,14 +1,12 @@
 import unittest
-from unittest.mock import MagicMock, patch
 from pathlib import Path
-
+from unittest.mock import MagicMock, patch
 
 from mo2cli.browser import (
     FAST_FORWARD_SCRIPT,
     _browser_profile_dir,
     _detect_browser_channel,
     resolve_nxm_url,
-    batch_resolve_nxm_urls,
 )
 from mo2cli.workspace import Mo2Error
 

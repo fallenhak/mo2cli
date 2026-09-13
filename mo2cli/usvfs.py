@@ -10,7 +10,6 @@ from pathlib import Path
 
 from .workspace import Instance, Mo2Error
 
-
 LINKFLAG_RECURSIVE = 0x8
 INFINITE = 0xFFFFFFFF
 

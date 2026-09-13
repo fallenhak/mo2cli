@@ -66,6 +66,13 @@ class DownloadTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+        renamed_arch = self.instance.downloads_dir / "Completely-Renamed-Package.zip"
+        renamed_arch.write_bytes(b"renamed")
+        (self.instance.downloads_dir / f"{renamed_arch.name}.meta").write_text(
+            "[General]\nmodID=43158\ninstalled=false\nuninstalled=false\n",
+            encoding="utf-8",
+        )
+
         # 4. Root Builder archive with MO2 plugin installed
         rb_plugin = self.instance.base / "plugins" / "rootbuilder"
         rb_plugin.mkdir(parents=True, exist_ok=True)
@@ -104,6 +111,7 @@ class DownloadTests(unittest.TestCase):
 
         self.assertIn("Lux (main)-43158-7-0.rar", updated_names)
         self.assertIn("Lux (main plugin update)-43158-7-1.rar", updated_names)
+        self.assertIn("Completely-Renamed-Package.zip", updated_names)
         self.assertIn("Root Builder-31720-5-1-1.zip", updated_names)
         self.assertIn("Mod Organizer 2-6194-2-5-2.exe", updated_names)
         self.assertNotIn("Unrelated-99999.zip", updated_names)
@@ -113,6 +121,7 @@ class DownloadTests(unittest.TestCase):
         for name in [
             "Lux (main)-43158-7-0.rar.meta",
             "Lux (main plugin update)-43158-7-1.rar.meta",
+            "Completely-Renamed-Package.zip.meta",
             "Root Builder-31720-5-1-1.zip.meta",
             "Mod Organizer 2-6194-2-5-2.exe.meta",
         ]:
@@ -150,9 +159,50 @@ class DownloadTests(unittest.TestCase):
         self.assertTrue(doc.get("installed", section="General"))
         self.assertFalse(doc.get("uninstalled", section="General"))
 
+    def test_failed_merge_leaves_existing_mod_unchanged(self):
+        archive = self.instance.downloads_dir / "Broken-Update.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("Data/file1.txt", b"replacement")
+        existing = self.instance.mods_dir / "Base Mod"
+        original = (existing / "textures" / "same.dds").read_bytes()
+
+        def fail_after_write(source, destination):
+            (destination / "textures").mkdir(parents=True, exist_ok=True)
+            (destination / "textures" / "same.dds").write_bytes(b"damaged")
+            raise OSError("simulated copy failure")
+
+        from unittest.mock import patch
+
+        with patch("mo2cli.installer._copy_tree", side_effect=fail_after_write):
+            with self.assertRaises(OSError):
+                install_archive(self.instance, archive, "Default", name="Base Mod", merge=True)
+
+        self.assertEqual((existing / "textures" / "same.dds").read_bytes(), original)
+
+    def test_failed_install_restores_profile_and_download_metadata(self):
+        archive = self.instance.downloads_dir / "Rollback.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("Data/rollback.txt", b"rollback")
+        sidecar = self.instance.downloads_dir / f"{archive.name}.meta"
+        sidecar.write_text("[General]\ninstalled=false\nuninstalled=true\n", encoding="utf-8")
+        modlist = self.instance.profile_path("Default") / "modlist.txt"
+        original_modlist = modlist.read_text(encoding="utf-8")
+        original_sidecar = sidecar.read_text(encoding="utf-8")
+
+        from unittest.mock import patch
+
+        with patch("mo2cli.plugins.sync_plugin_lists", side_effect=OSError("simulated sync failure")):
+            with self.assertRaises(OSError):
+                install_archive(self.instance, archive, "Default", name="Rollback Mod")
+
+        self.assertFalse((self.instance.mods_dir / "Rollback Mod").exists())
+        self.assertEqual(modlist.read_text(encoding="utf-8"), original_modlist)
+        self.assertEqual(sidecar.read_text(encoding="utf-8"), original_sidecar)
+
     def test_fetch_creates_meta_with_url(self):
         import io
         from unittest.mock import patch
+
         from mo2cli.downloads import fetch
 
         dummy_bytes = b"sample_archive_content"
@@ -177,4 +227,3 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(doc.get("name", section="General"), target.name)
         self.assertFalse(doc.get("installed", section="General"))
         self.assertTrue(doc.get("uninstalled", section="General"))
-

@@ -8,7 +8,6 @@ from typing import Any
 from .archives import sha256
 from .workspace import Instance
 
-
 SCHEMA_VERSION = 1
 
 

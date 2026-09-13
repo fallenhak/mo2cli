@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
-from collections import Counter
 import hashlib
 import json
 import re
 import shutil
+import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 

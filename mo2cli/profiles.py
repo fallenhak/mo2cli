@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -12,12 +14,16 @@ def _safe_member(name: str) -> PurePosixPath:
     path = PurePosixPath(name.replace("\\", "/"))
     if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise Mo2Error(f"Unsafe path in profile archive: {name}")
+    for part in path.parts:
+        _safe_name(part)
     return path
 
 
 def export_profile(instance: Instance, profile: str | None, destination: str | Path) -> dict[str, object]:
     profile_path = instance.profile_path(profile)
     output = Path(destination).expanduser().resolve()
+    if output.is_relative_to(profile_path.resolve()):
+        raise Mo2Error("Profile export archive cannot be written inside the profile being exported.")
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest = {"format": "mo2cli-profile", "version": 1, "profile": profile_path.name}
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -47,22 +53,44 @@ def import_profile(instance: Instance, archive_path: str | Path, name: str | Non
         if destination.exists():
             if not replace:
                 raise Mo2Error(f"Profile already exists: {profile_name}; use --replace to overwrite.")
-            shutil.rmtree(destination)
-        destination.mkdir(parents=True, exist_ok=False)
+        members: list[tuple[zipfile.ZipInfo, PurePosixPath]] = []
+        for member in archive.infolist():
+            if member.filename == "manifest.json" or member.is_dir():
+                continue
+            relative = _safe_member(member.filename)
+            if len(relative.parts) < 2 or relative.parts[0].casefold() != "profile":
+                raise Mo2Error(f"Unexpected file in profile archive: {member.filename}")
+            members.append((member, relative))
+
+        instance.profiles_dir.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{profile_name}.mo2cli-import-", dir=instance.profiles_dir))
+        replaced_path: Path | None = None
         try:
-            for member in archive.infolist():
-                if member.filename == "manifest.json" or member.is_dir():
-                    continue
-                relative = _safe_member(member.filename)
-                if len(relative.parts) < 2 or relative.parts[0].casefold() != "profile":
-                    raise Mo2Error(f"Unexpected file in profile archive: {member.filename}")
-                target = destination.joinpath(*relative.parts[1:])
-                if not target.resolve().is_relative_to(destination.resolve()):
+            for member, relative in members:
+                target = staging.joinpath(*relative.parts[1:])
+                if not target.resolve().is_relative_to(staging.resolve()):
                     raise Mo2Error(f"Unsafe target in profile archive: {member.filename}")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source_file, target.open("wb") as output:
                     shutil.copyfileobj(source_file, output)
+
+            if destination.exists():
+                stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+                replaced_path = instance.base / ".mo2cli-trash" / f"profile-{profile_name}-{stamp}"
+                replaced_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(destination), str(replaced_path))
+            staging.rename(destination)
         except Exception:
-            shutil.rmtree(destination, ignore_errors=True)
+            if destination.exists() and replaced_path is not None:
+                shutil.rmtree(destination, ignore_errors=True)
+            if replaced_path is not None and replaced_path.exists() and not destination.exists():
+                shutil.move(str(replaced_path), str(destination))
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
             raise
-    return {"profile": profile_name, "path": str(destination), "archive": str(source)}
+    return {
+        "profile": profile_name,
+        "path": str(destination),
+        "archive": str(source),
+        "replaced": str(replaced_path) if replaced_path else None,
+    }

@@ -6,7 +6,6 @@ from pathlib import Path
 
 from .workspace import Instance, Mo2Error
 
-
 KNOWN_BINARIES = {
     "skyrim": ("SkyrimSE.exe", "TESV.exe"),
     "fallout 4": ("Fallout4.exe",),

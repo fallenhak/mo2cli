@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from .formats import ModList, write_text
-from .separators import ensure as ensure_separator, group as group_separator
+from .separators import ensure as ensure_separator
+from .separators import group as group_separator
 from .tools import find_executable
 from .usvfs import run as run_vfs
 from .workspace import Instance, Mo2Error, _safe_name
-
 
 TOOL_OUTPUTS_SEPARATOR = "18. _____________________________________ TOOL OUTPUTS __________________________________________"
 PANDORA_TITLE = "Pandora Behaviour Engine+"

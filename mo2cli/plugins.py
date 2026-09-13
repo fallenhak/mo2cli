@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import struct
 import datetime as dt
 import json
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 from dataclasses import dataclass, field

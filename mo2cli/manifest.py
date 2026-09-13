@@ -8,7 +8,8 @@ from typing import Any
 from .downloads import fetch
 from .installer import install_archive
 from .nexus import NexusReference, download_reference, game_domain, parse_reference
-from .separators import ensure as ensure_separator, group as group_separator
+from .separators import ensure as ensure_separator
+from .separators import group as group_separator
 from .workspace import Instance, Mo2Error
 
 
@@ -65,15 +66,68 @@ def apply(
     separator_specs = _list(root.get("separators", []), "separators")
     result: dict[str, object] = {"manifest": str(source), "profile": selected_profile, "dry_run": dry_run, "separators": [], "mods": [], "groups": []}
     if dry_run:
+        for item in separator_specs:
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise Mo2Error("Manifest separator requires a name.")
+            if item.get("before") and item.get("after"):
+                raise Mo2Error(f"Manifest separator cannot specify both before and after: {name}")
+            if "mods" in item and not isinstance(item.get("mods"), list):
+                raise Mo2Error(f"Manifest separator mods must be a list: {name}")
         dry_separators = [{"name": item.get("name"), "before": item.get("before"), "after": item.get("after")} for item in separator_specs]
         declared = {str(item.get("name")).casefold() for item in separator_specs if isinstance(item.get("name"), str)}
         for item in mod_specs:
+            if item.get("name") is not None and not isinstance(item.get("name"), str):
+                raise Mo2Error("Manifest mod name must be a string.")
             name = item.get("separator")
+            if name is not None and not isinstance(name, str):
+                raise Mo2Error("Manifest mod separator must be a string.")
+            if name and not isinstance(item.get("name"), str):
+                raise Mo2Error("Mod name required for manifest entries assigned to a separator.")
             if isinstance(name, str) and name.casefold() not in declared:
                 dry_separators.append({"name": name, "before": None, "after": None, "implicit": True})
                 declared.add(name.casefold())
+            if "fomod" in item and not isinstance(item.get("fomod"), dict):
+                raise Mo2Error("Manifest fomod field must be an object.")
+            fomod = item.get("fomod") or {}
+            if not isinstance(fomod.get("select", {}), dict) or not isinstance(fomod.get("flags", {}), dict):
+                raise Mo2Error("Manifest fomod.select and fomod.flags must be objects.")
+
+            local_path = item.get("path")
+            if local_path is None and isinstance(item.get("source"), str) and not str(item["source"]).startswith(("http://", "https://")):
+                local_path = item["source"]
+            raw_source = item.get("source") or item.get("url") or item.get("nxm") or item.get("nexus") or item.get("path")
+            if not raw_source:
+                raise Mo2Error("Manifest mod entry requires path, url, nxm, or nexus.")
+            preview: dict[str, object] = {
+                "name": item.get("name"),
+                "source": raw_source,
+                "separator": item.get("separator"),
+            }
+            if local_path:
+                archive = (source.parent / str(local_path)).resolve()
+                preview["plan"] = install_archive(
+                    instance,
+                    archive,
+                    selected_profile,
+                    name=item.get("name"),
+                    disabled=bool(item.get("disabled", False)),
+                    replace=bool(item.get("replace", replace)),
+                    allow_fomod="fomod" in item,
+                    source=item.get("source_dir"),
+                    fomod_selections=fomod.get("select"),
+                    fomod_flags=fomod.get("flags"),
+                    fomod_game_version=fomod.get("game_version"),
+                    separator=item.get("separator"),
+                    fomod_reuse="never",
+                    dry_run=True,
+                )
+                preview["validated"] = True
+            else:
+                preview["validated"] = False
+                preview["validation_pending"] = "Remote archive is not downloaded during dry-run."
+            result["mods"].append(preview)
         result["separators"] = dry_separators
-        result["mods"] = [{"name": item.get("name"), "source": item.get("source") or item.get("url") or item.get("nxm") or item.get("nexus") or item.get("path"), "separator": item.get("separator")} for item in mod_specs]
         result["groups"] = [{"separator": item.get("name"), "mods": item.get("mods", [])} for item in separator_specs if item.get("mods")]
         return result
 
@@ -196,7 +250,7 @@ def apply(
                 if download_result.get("version"):
                     metadata_updates["version"] = download_result["version"]
                 metadata_updates = {key: value for key, value in metadata_updates.items() if value is not None}
-            installed = install_archive(instance, archive, selected_profile, name=spec.get("name"), disabled=bool(spec.get("disabled", False)), replace=bool(spec.get("replace", replace)), allow_fomod=bool(fomod), source=spec.get("source_dir"), fomod_selections=fomod.get("select"), fomod_flags=fomod.get("flags"), fomod_game_version=fomod.get("game_version"), metadata_updates=metadata_updates, separator=spec.get("separator"), fomod_reuse="never")
+            installed = install_archive(instance, archive, selected_profile, name=spec.get("name"), disabled=bool(spec.get("disabled", False)), replace=bool(spec.get("replace", replace)), allow_fomod="fomod" in spec, source=spec.get("source_dir"), fomod_selections=fomod.get("select"), fomod_flags=fomod.get("flags"), fomod_game_version=fomod.get("game_version"), metadata_updates=metadata_updates, separator=spec.get("separator"), fomod_reuse="never")
             if download_result:
                 installed["download"] = download_result
             installed["separator"] = spec.get("separator")

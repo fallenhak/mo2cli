@@ -55,11 +55,26 @@ def history(instance: Instance, limit: int = 20) -> list[dict[str, Any]]:
     return _read(instance)[-max(1, limit):]
 
 
-def _restore_profiles(details: dict[str, Any]) -> None:
+def _restore_profiles(instance: Instance, details: dict[str, Any]) -> None:
     for item in details.get("profiles", []):
         path = Path(str(item["path"]))
+        if not _path_inside(path, instance.profiles_dir):
+            raise Mo2Error("Journal profile target is outside profiles directory; operation aborted.")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(item.get("content", "")), encoding="utf-8", newline="")
+
+
+def _restore_state_files(instance: Instance, details: dict[str, Any]) -> None:
+    allowed_roots = (instance.profiles_dir, instance.downloads_dir)
+    for item in details.get("state_files", []):
+        path = Path(str(item["path"]))
+        if not any(_path_inside(path, root) for root in allowed_roots):
+            raise Mo2Error("Journal state target is outside safe directories; operation aborted.")
+        if item.get("exists"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(item.get("content", "")), encoding="utf-8", newline="")
+        elif path.exists():
+            path.unlink()
 
 
 def undo_last(instance: Instance) -> dict[str, Any]:
@@ -83,7 +98,8 @@ def undo_last(instance: Instance) -> dict[str, Any]:
             old = Path(str(replaced))
             if old.exists() and _path_inside(old, instance.base / ".mo2cli-trash"):
                 shutil.move(str(old), str(destination))
-        _restore_profiles(target)
+        _restore_profiles(instance, target)
+        _restore_state_files(instance, target)
     elif operation == "remove":
         destination = Path(str(target["destination"]))
         trash = Path(str(target.get("trash") or ""))
@@ -95,7 +111,7 @@ def undo_last(instance: Instance) -> dict[str, Any]:
             raise Mo2Error(f"Trash copy not found: {trash}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(trash), str(destination))
-        _restore_profiles(target)
+        _restore_profiles(instance, target)
     elif operation == "rename":
         old = Path(str(target["old_path"]))
         new = Path(str(target["new_path"]))
@@ -104,7 +120,7 @@ def undo_last(instance: Instance) -> dict[str, Any]:
         if old.exists() or not new.is_dir():
             raise Mo2Error("Expected mod paths for rename undo have changed.")
         new.rename(old)
-        _restore_profiles(target)
+        _restore_profiles(instance, target)
     elif operation == "separator_create":
         path = Path(str(target["path"]))
         if not _path_inside(path, instance.mods_dir):
@@ -114,7 +130,7 @@ def undo_last(instance: Instance) -> dict[str, Any]:
             if unexpected:
                 raise Mo2Error(f"Separator contains unexpected files, not removed: {path}")
             shutil.rmtree(path)
-        _restore_profiles(target)
+        _restore_profiles(instance, target)
     elif operation == "separator_remove":
         path = Path(str(target["path"]))
         trash = Path(str(target.get("trash") or ""))
@@ -126,9 +142,9 @@ def undo_last(instance: Instance) -> dict[str, Any]:
             raise Mo2Error(f"Separator trash copy not found: {trash}")
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(trash), str(path))
-        _restore_profiles(target)
+        _restore_profiles(instance, target)
     elif operation == "separator_group":
-        _restore_profiles(target)
+        _restore_profiles(instance, target)
 
     result = {"undone": target["operation"], "id": target["id"]}
     record(instance, "undo", reversible=False, target=target["id"], result=result)

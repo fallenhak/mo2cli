@@ -3,17 +3,27 @@ from __future__ import annotations
 import datetime as dt
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from .archives import archive_stem, extract_to_temp
+from .fomod import (
+    apply_plan,
+    config_hash,
+    dependency_files,
+    module_name,
+    plan_extracted,
+    public_plan,
+    reconcile_selections,
+)
+from .fomod_decisions import archive_fingerprint, context_snapshot, decision_path
+from .fomod_decisions import find as find_fomod_decision
+from .fomod_decisions import save as save_fomod_decision
 from .formats import ModList, write_text
-from .fomod import apply_plan, config_hash, dependency_files, module_name, plan_extracted, public_plan, reconcile_selections
-from .fomod_decisions import archive_fingerprint, context_snapshot, find as find_fomod_decision, save as save_fomod_decision
 from .journal import record
 from .metadata import IniDocument, ModMetadata
 from .workspace import Instance, Mo2Error, _safe_name
-
 
 _GAME_DATA_DIRECTORIES = {
     "calientetools",
@@ -170,6 +180,26 @@ def _trash_path(instance: Instance, name: str) -> Path:
     return instance.base / ".mo2cli-trash" / f"{name}-{stamp}"
 
 
+def _snapshot_text_files(paths: list[Path]) -> list[dict[str, object]]:
+    return [
+        {
+            "path": str(path),
+            "exists": path.is_file(),
+            "content": path.read_text(encoding="utf-8") if path.is_file() else "",
+        }
+        for path in paths
+    ]
+
+
+def _restore_text_files(snapshots: list[dict[str, object]]) -> None:
+    for item in snapshots:
+        path = Path(str(item["path"]))
+        if item.get("exists"):
+            write_text(path, str(item.get("content", "")))
+        elif path.exists():
+            path.unlink()
+
+
 def install_archive(
     instance: Instance,
     archive: str | Path,
@@ -195,6 +225,9 @@ def install_archive(
     extracted = extract_to_temp(archive_path)
     moved_to: Path | None = None
     destination: Path | None = None
+    existing: Path | None = None
+    staging: Path | None = None
+    state_snapshots: list[dict[str, object]] = []
     decision_payload: dict[str, Any] | None = None
     try:
         has_fomod = _has_fomod(extracted.root)
@@ -282,21 +315,35 @@ def install_archive(
             return result
         profile_path = instance.profile_path(profile)
         modlist_path = profile_path / "modlist.txt"
-        previous_modlist = modlist_path.read_text(encoding="utf-8") if modlist_path.exists() else ""
-        if existing:
-            if not merge:
-                moved_to = _trash_path(instance, existing.name)
-                moved_to.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(existing), str(moved_to))
+        profile_state_paths = [modlist_path, profile_path / "plugins.txt", profile_path / "loadorder.txt"]
+        sidecar_paths = list(dict.fromkeys([
+            Path(f"{archive_path}.meta"),
+            instance.downloads_dir / f"{archive_path.name}.meta",
+        ]))
+        decision_file = decision_path(instance, profile)
+        state_snapshots = _snapshot_text_files(profile_state_paths + sidecar_paths + [decision_file])
+
+        instance.mods_dir.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{mod_name}.mo2cli-install-", dir=instance.mods_dir))
+        if existing and merge:
+            shutil.copytree(existing, staging, dirs_exist_ok=True)
         if plan is not None:
-            apply_plan(plan, destination)
+            apply_plan(plan, staging)
         else:
-            _copy_tree(root, destination)
-        metadata = ModMetadata.read(destination)
+            _copy_tree(root, staging)
+        metadata = ModMetadata.read(staging)
         if not (existing and merge):
             metadata.update({"installationFile": archive_path.name, "gameName": _metadata_game_name(instance)})
         if metadata_updates:
             metadata.update(metadata_updates)
+
+        if existing:
+            moved_to = _trash_path(instance, existing.name)
+            moved_to.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(existing), str(moved_to))
+        staging.rename(destination)
+        staging = None
+
         modlist = ModList.read(modlist_path)
         old = modlist.find(mod_name)
         if old:
@@ -310,16 +357,37 @@ def install_archive(
         _mark_download_installed(instance, archive_path)
         if decision_payload is not None:
             save_fomod_decision(instance, profile, decision_payload)
-        journal_entry = record(instance, "install", destination=str(destination), replaced=str(moved_to) if moved_to else None, profiles=[{"path": str(modlist_path), "content": previous_modlist}])
+        journal_entry = record(
+            instance,
+            "install",
+            destination=str(destination),
+            replaced=str(moved_to) if moved_to else None,
+            profiles=[
+                {"path": str(item["path"]), "content": item["content"]}
+                for item in state_snapshots
+                if Path(str(item["path"])).parent == profile_path
+            ],
+            state_files=[
+                item
+                for item in state_snapshots
+                if Path(str(item["path"])).parent != profile_path
+            ],
+        )
         result = {"name": mod_name, "path": str(destination), "archive": str(archive_path), "fomod": has_fomod, "replaced": str(moved_to) if moved_to else None, "merged": bool(existing and merge), "enabled": not disabled, "selected": plan.get("selected", []) if plan else None, "journal_id": journal_entry["id"]}
         if decision_payload is not None:
             result["decision"] = decision_payload
         return result
     except Exception:
-        if destination and destination.exists() and not (existing and merge):
+        if destination and destination.exists() and moved_to is not None:
+            shutil.rmtree(destination)
+        elif destination and destination.exists() and existing is None:
             shutil.rmtree(destination)
         if moved_to and moved_to.exists():
             shutil.move(str(moved_to), str(destination))
+        if state_snapshots:
+            _restore_text_files(state_snapshots)
+        if staging and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
         raise
 
     finally:
@@ -337,19 +405,25 @@ def remove_mod(instance: Instance, name: str, purge: bool = False, yes: bool = F
     for profile_name in instance.list_profiles():
         modlist_path = instance.profiles_dir / profile_name / "modlist.txt"
         profile_backups.append({"path": str(modlist_path), "content": modlist_path.read_text(encoding="utf-8") if modlist_path.exists() else ""})
-    moved_to = None
+    moved_to = _trash_path(instance, path.name)
+    moved_to.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(path), str(moved_to))
+    try:
+        for profile_name in instance.list_profiles():
+            profile = instance.profiles_dir / profile_name
+            modlist = ModList.read(profile / "modlist.txt")
+            modlist.lines = [line for line in modlist.lines if not (hasattr(line, "name") and line.name.casefold() == name.casefold())]
+            write_text(profile / "modlist.txt", modlist.render())
+        journal_entry = record(instance, "remove", reversible=not purge, destination=str(instance.mods_dir / path.name), trash=str(moved_to), profiles=profile_backups)
+    except Exception:
+        if moved_to.exists() and not path.exists():
+            shutil.move(str(moved_to), str(path))
+        for backup in profile_backups:
+            write_text(Path(str(backup["path"])), str(backup["content"]))
+        raise
     if purge:
-        shutil.rmtree(path)
-    else:
-        moved_to = _trash_path(instance, path.name)
-        moved_to.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(path), str(moved_to))
-    for profile_name in instance.list_profiles():
-        profile = instance.profiles_dir / profile_name
-        modlist = ModList.read(profile / "modlist.txt")
-        modlist.lines = [line for line in modlist.lines if not (hasattr(line, "name") and line.name.casefold() == name.casefold())]
-        write_text(profile / "modlist.txt", modlist.render())
-    journal_entry = record(instance, "remove", reversible=not purge, destination=str(instance.mods_dir / path.name), trash=str(moved_to) if moved_to else None, profiles=profile_backups)
+        shutil.rmtree(moved_to)
+        moved_to = None
     return {"removed": name, "purged": purge, "trash": str(moved_to) if moved_to else None, "journal_id": journal_entry["id"]}
 
 
@@ -367,11 +441,18 @@ def rename_mod(instance: Instance, old: str, new: str) -> dict[str, object]:
         modlist_path = instance.profiles_dir / profile_name / "modlist.txt"
         profile_backups.append({"path": str(modlist_path), "content": modlist_path.read_text(encoding="utf-8") if modlist_path.exists() else ""})
     source.rename(target)
-    for profile_name in instance.list_profiles():
-        profile = instance.profiles_dir / profile_name
-        modlist = ModList.read(profile / "modlist.txt")
-        if modlist.find(old):
-            modlist.rename(old, new)
-            write_text(profile / "modlist.txt", modlist.render())
-    journal_entry = record(instance, "rename", old_path=str(source), new_path=str(target), profiles=profile_backups)
+    try:
+        for profile_name in instance.list_profiles():
+            profile = instance.profiles_dir / profile_name
+            modlist = ModList.read(profile / "modlist.txt")
+            if modlist.find(old):
+                modlist.rename(old, new)
+                write_text(profile / "modlist.txt", modlist.render())
+        journal_entry = record(instance, "rename", old_path=str(source), new_path=str(target), profiles=profile_backups)
+    except Exception:
+        if target.exists() and not source.exists():
+            target.rename(source)
+        for backup in profile_backups:
+            write_text(Path(str(backup["path"])), str(backup["content"]))
+        raise
     return {"old": old, "new": new, "path": str(target), "journal_id": journal_entry["id"]}

@@ -34,14 +34,29 @@ A standalone, scriptable command-line interface (CLI) for managing Mod Organizer
 Requires Python 3.11+:
 
 ```powershell
-python -m pip install -e .
+python -m pip install "mo2cli @ git+https://github.com/fallenhak/mo2cli.git"
 mo2 --help
 ```
 
-You can also run without installation:
+For an editable development checkout:
+
 ```powershell
+git clone https://github.com/fallenhak/mo2cli.git
+cd mo2cli
+python -m pip install -e ".[dev]"
 python -m mo2cli --help
 ```
+
+Browser-assisted Nexus commands additionally require `python -m pip install -e ".[browser]"` and `playwright install chromium`.
+
+## Safety & Recovery
+
+- Close Mod Organizer 2 before running commands that change an instance. Mutating commands refuse to run while MO2 is detected and use one per-instance writer lock.
+- Preview installs and manifests with `--dry-run`. FOMOD installation is opt-in through `--allow-fomod` or a manifest `fomod` object.
+- Archive paths, links, Windows device names, file counts, expanded size, compression ratio, and available disk space are checked before extraction where the archive backend exposes that metadata.
+- Replaced and removed content is retained under `.mo2cli-trash`; successful materialization replacement reports the backup directory it preserved.
+- Use `mo2 --instance "D:\Games\ModOrganizer\Skyrim" history` to inspect recorded operations and `undo` to reverse the latest supported operation.
+- Keep an independent backup of an important instance. The journal and trash improve recoverability but are not a substitute for backups.
 
 ## Usage
 
@@ -172,6 +187,9 @@ This project was designed by inspecting the official [ModOrganizer2/modorganizer
 ```powershell
 python -m unittest discover -s tests -v
 python -m compileall mo2cli
+ruff check --select E9,F63,F7,F82 mo2cli tests
+python -m build
+twine check dist/*
 ```
 
 Extraction of 7z/RAR archives requires system PATH binaries (`7z`, `7zz`, or `7za`).

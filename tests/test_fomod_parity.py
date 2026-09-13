@@ -1,15 +1,21 @@
-from contextlib import redirect_stdout
 import io
 import json
 import os
 import tempfile
 import unittest
 import zipfile
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 from mo2cli.cli import main
-from mo2cli.fomod import compare_fomod_plus, inspect_archive, plan_archive, reconcile_selections, selections_from_fomod_plus
+from mo2cli.fomod import (
+    compare_fomod_plus,
+    inspect_archive,
+    plan_archive,
+    reconcile_selections,
+    selections_from_fomod_plus,
+)
 from mo2cli.workspace import Instance, Mo2Error
 
 

@@ -8,25 +8,37 @@ from pathlib import Path
 
 from . import __version__
 from .archives import archive_stem, list_archive, sha256
-from .formats import ModList, PluginList, write_text
-from .installer import install_archive, remove_mod, rename_mod
-from .inis import diff_game_ini, get_value, list_inis, set_value
-from .journal import history as journal_history, undo_last
-from .manifest import apply as apply_manifest
-from .downloads import fetch as fetch_download, list_downloads
-from .game import run_game
-from .fomod import inspect_archive as inspect_fomod, load_fomod_plus_record
+from .downloads import fetch as fetch_download
+from .downloads import list_downloads
+from .fomod import inspect_archive as inspect_fomod
+from .fomod import load_fomod_plus_record
 from .fomod_decisions import list_decisions
+from .formats import ModList, PluginList, write_text
+from .game import run_game
+from .inis import diff_game_ini, get_value, list_inis, set_value
+from .installer import install_archive, remove_mod, rename_mod
 from .instance import initialize
 from .instances import list_instances
-from .plugins import analyze as analyze_plugins, catalog as plugin_catalog, ordered_entries as ordered_plugin_entries, remove_plugin_entries, sync_plugin_lists
-from .profiles import export_profile, import_profile
-from .nexus import download_reference
+from .journal import history as journal_history
+from .journal import undo_last
+from .manifest import apply as apply_manifest
 from .metadata import sync_metadata
-from .separators import create as create_separator, ensure as ensure_separator, group as group_separator, list_separators, remove as remove_separator
-from .tools import run_executable
+from .nexus import download_reference
+from .plugins import analyze as analyze_plugins
+from .plugins import ordered_entries as ordered_plugin_entries
+from .plugins import remove_plugin_entries, sync_plugin_lists
+from .profiles import export_profile, import_profile
+from .safety import mutation_guard
+from .separators import create as create_separator
+from .separators import ensure as ensure_separator
+from .separators import group as group_separator
+from .separators import list_separators
+from .separators import remove as remove_separator
 from .tool_workflows import run_bodyslide, run_pandora
-from .usvfs import cleanup as cleanup_vfs, run as run_vfs, status as vfs_status
+from .tools import run_executable
+from .usvfs import cleanup as cleanup_vfs
+from .usvfs import run as run_vfs
+from .usvfs import status as vfs_status
 from .workspace import Instance, Mo2Error
 
 
@@ -712,6 +724,39 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mutates_instance(args: argparse.Namespace) -> bool:
+    command = args.command
+    if command in {"undo"}:
+        return True
+    if command == "profiles":
+        return args.profiles_command != "list" and args.profiles_command != "export"
+    if command == "mods":
+        if args.mods_command == "install":
+            return not args.dry_run
+        if args.mods_command == "metadata":
+            return bool(args.updates or args.sync)
+        return args.mods_command in {"remove", "rename", "enable", "disable", "move", "separator"} and not (
+            args.mods_command == "separator" and args.separator_command == "list"
+        )
+    if command == "plugins":
+        return args.plugins_command in {"remove", "enable", "disable", "move", "sync"} or (
+            args.plugins_command == "sort" and not args.dry_run
+        )
+    if command == "inis":
+        return args.inis_command == "set"
+    if command == "files":
+        return args.files_command == "materialize"
+    if command == "tools":
+        return args.tools_command == "automate" and not args.dry_run
+    if command == "downloads":
+        return args.downloads_command in {"sync", "mark-installed", "fetch"}
+    if command == "manifest":
+        return not args.dry_run
+    if command == "vfs":
+        return args.vfs_command == "cleanup"
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         try:
@@ -727,6 +772,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     args.json = getattr(args, "json", False)
     try:
+        if _mutates_instance(args):
+            instance = Instance.open(getattr(args, "instance", None))
+            with mutation_guard(instance):
+                return run(args)
         return run(args)
     except (Mo2Error, OSError) as error:
         print(f"Error: {error}", file=sys.stderr)

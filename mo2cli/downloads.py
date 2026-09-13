@@ -109,6 +109,7 @@ def sync_downloads(instance: Instance) -> dict[str, object]:
             if meta_ini.is_file():
                 try:
                     meta_doc = IniDocument.read(meta_ini)
+                    mod_id = meta_doc.get("modID", section="General") or meta_doc.get("modid", section="General")
                     inst_file = meta_doc.get("installationFile", section="General") or meta_doc.get("installationFile")
                     if inst_file:
                         inst_str = str(inst_file).strip()

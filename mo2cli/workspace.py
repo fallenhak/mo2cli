@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import configparser
 import ctypes
+import datetime as dt
 import json
 import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,7 +80,15 @@ def _resolve(value: str, base: Path, root: Path) -> Path:
 
 
 def _safe_name(name: str) -> None:
-    if not name.strip() or name in {".", ".."} or re.search(r"[<>:\"/\\|?*]", name):
+    reserved = {"con", "prn", "aux", "nul", *(f"com{index}" for index in range(1, 10)), *(f"lpt{index}" for index in range(1, 10))}
+    stem = name.split(".", 1)[0].casefold()
+    if (
+        not name.strip()
+        or name != name.rstrip(" .")
+        or name in {".", ".."}
+        or stem in reserved
+        or re.search(r"[<>:\"/\\|?*]", name)
+    ):
         raise Mo2Error(f"Invalid name: {name!r}")
 
 
@@ -455,27 +465,61 @@ class Instance:
         include_prefixes: tuple[str, ...] | None = None,
     ) -> dict[str, object]:
         target_root = Path(destination).expanduser().resolve()
+        filesystem_root = Path(target_root.anchor).resolve()
+        managed_roots = [self.mods_dir, self.profiles_dir, self.downloads_dir, self.overwrite_dir]
+        protected_roots = [Path.home(), self.root, self.base, *managed_roots]
+        if self.game_path:
+            protected_roots.append(self.game_path)
+        overlaps_protected_root = any(
+            target_root == protected.resolve()
+            or protected.resolve().is_relative_to(target_root)
+            or (
+                (protected in managed_roots or protected == self.game_path)
+                and target_root.is_relative_to(protected.resolve())
+            )
+            for protected in protected_roots
+        )
+        if target_root == filesystem_root or overlaps_protected_root:
+            raise Mo2Error(f"Refusing to materialize over a protected directory: {target_root}")
+        if target_root.exists() and not target_root.is_dir():
+            raise Mo2Error(f"Destination is not a directory: {target_root}")
         if target_root.exists() and any(target_root.iterdir()):
             if not replace:
                 raise Mo2Error(f"Destination directory is not empty; use --replace to overwrite: {target_root}")
-            shutil.rmtree(target_root)
-        target_root.mkdir(parents=True, exist_ok=True)
+        target_root.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{target_root.name}.mo2cli-stage-", dir=target_root.parent))
+        backup: Path | None = None
         count = 0
-        for item in self.virtual_files(requested):
-            if include_prefixes:
-                normalized = str(item["path"]).replace("\\", "/").casefold().lstrip("/")
-                prefixes = tuple(prefix.replace("\\", "/").casefold().lstrip("/").rstrip("/") + "/" for prefix in include_prefixes)
-                if not any(normalized.startswith(prefix) for prefix in prefixes):
-                    continue
-            winner = item["winner"]
-            relative = str(winner.get("relative") or item["path"])
-            target = target_root.joinpath(*Path(relative).parts)
-            if not target.resolve().is_relative_to(target_root):
-                raise Mo2Error(f"Virtual file path escapes destination directory: {relative}")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(winner["path"], target)
-            count += 1
-        return {"destination": str(target_root), "files": count}
+        try:
+            for item in self.virtual_files(requested):
+                if include_prefixes:
+                    normalized = str(item["path"]).replace("\\", "/").casefold().lstrip("/")
+                    prefixes = tuple(prefix.replace("\\", "/").casefold().lstrip("/").rstrip("/") + "/" for prefix in include_prefixes)
+                    if not any(normalized.startswith(prefix) for prefix in prefixes):
+                        continue
+                winner = item["winner"]
+                relative = str(winner.get("relative") or item["path"])
+                target = staging.joinpath(*Path(relative).parts)
+                if not target.resolve().is_relative_to(staging.resolve()):
+                    raise Mo2Error(f"Virtual file path escapes destination directory: {relative}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(winner["path"], target)
+                count += 1
+
+            if target_root.exists():
+                stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+                backup = target_root.with_name(f".{target_root.name}.mo2cli-backup-{stamp}")
+                target_root.rename(backup)
+            staging.rename(target_root)
+        except Exception:
+            if target_root.exists() and backup is not None:
+                shutil.rmtree(target_root, ignore_errors=True)
+            if backup is not None and backup.exists() and not target_root.exists():
+                backup.rename(target_root)
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return {"destination": str(target_root), "files": count, "replaced": str(backup) if backup else None}
 
     def doctor(self, requested: str | None = None) -> list[dict]:
         profile, mods, plugins = self.profile_files(requested)

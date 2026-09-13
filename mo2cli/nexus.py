@@ -15,7 +15,6 @@ from .downloads import fetch
 from .formats import write_text
 from .workspace import Instance, Mo2Error
 
-
 API_ROOT = "https://api.nexusmods.com/v1"
 APPLICATION_NAME = "mo2cli"
 

@@ -1,11 +1,11 @@
-import configparser
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from mo2cli.workspace import Instance, Mo2Error
 from mo2cli.cli import main
+from mo2cli.workspace import Instance, Mo2Error, _safe_name
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -67,6 +67,24 @@ class WorkspaceTests(unittest.TestCase):
         self.assertGreater(result["files"], 0)
         self.assertEqual((destination / "textures" / "same.dds").read_bytes(), b"overwrite")
 
+    def test_materialize_replace_preserves_previous_output_until_success(self):
+        instance = Instance.open(self.make_instance())
+        destination = Path(self.temp.name) / "materialized"
+        destination.mkdir()
+        marker = destination / "keep.txt"
+        marker.write_text("keep", encoding="utf-8")
+
+        with patch("mo2cli.workspace.shutil.copy2", side_effect=OSError("simulated copy failure")):
+            with self.assertRaises(OSError):
+                instance.materialize("Default", destination, replace=True)
+
+        self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
+
+    def test_materialize_refuses_managed_directories(self):
+        instance = Instance.open(self.make_instance())
+        with self.assertRaises(Mo2Error):
+            instance.materialize("Default", instance.mods_dir, replace=True)
+
     def test_plugin_move_writes_loadorder_not_plugins(self):
         root = self.make_instance()
         result = main(["plugins", "--instance", str(root), "--profile", "Default", "move", "Skyrim.esm", "0"])
@@ -92,3 +110,7 @@ class WorkspaceTests(unittest.TestCase):
         instance = Instance.open(sub_dir)
         self.assertEqual(instance.root.resolve(), root.resolve())
 
+    def test_windows_reserved_and_trailing_names_are_rejected(self):
+        for name in ("CON", "nul.txt", "Trailing. ", "Name."):
+            with self.subTest(name=name), self.assertRaises(Mo2Error):
+                _safe_name(name)

@@ -1,29 +1,37 @@
 import io
 import json
 import struct
-import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from mo2cli.archives import list_archive, sha256
+from mo2cli.archives import (
+    MAX_ARCHIVE_BYTES,
+    _archive_item_is_link,
+    _validate_expansion,
+    list_archive,
+    sha256,
+)
+from mo2cli.cli import main
+from mo2cli.fomod import inspect_archive, plan_archive
+from mo2cli.formats import ModList
+from mo2cli.inis import get_value, set_value
 from mo2cli.installer import install_archive, remove_mod, rename_mod
+from mo2cli.instance import initialize
 from mo2cli.journal import undo_last
 from mo2cli.manifest import apply as apply_manifest
-from mo2cli.nexus import NexusReference, download_reference, parse_reference
-from mo2cli.cli import main
-from mo2cli.separators import create as create_separator, group as group_separator, remove as remove_separator
-from mo2cli.inis import get_value, set_value
-from mo2cli.instance import initialize
-from mo2cli.fomod import inspect_archive, plan_archive
-from mo2cli.usvfs import status as usvfs_status
-from mo2cli.tool_workflows import ensure_output_mod, run_bodyslide
-from mo2cli.profiles import export_profile, import_profile
-from mo2cli.plugins import analyze as analyze_plugins, catalog as plugin_catalog
-from mo2cli.workspace import Instance, Mo2Error
-from mo2cli.formats import ModList
 from mo2cli.metadata import ModMetadata, sync_metadata
+from mo2cli.nexus import NexusReference, download_reference, parse_reference
+from mo2cli.plugins import analyze as analyze_plugins
+from mo2cli.plugins import catalog as plugin_catalog
+from mo2cli.profiles import export_profile, import_profile
+from mo2cli.separators import create as create_separator
+from mo2cli.separators import group as group_separator
+from mo2cli.separators import remove as remove_separator
+from mo2cli.tool_workflows import ensure_output_mod, run_bodyslide
+from mo2cli.usvfs import status as usvfs_status
+from mo2cli.workspace import Instance, Mo2Error
 
 
 class FeatureTests(unittest.TestCase):
@@ -145,6 +153,33 @@ class FeatureTests(unittest.TestCase):
         index = names.index("Auto Group_separator")
         self.assertEqual(names[index - 1:index + 1], ["Source Alias", "Auto Group_separator"])
         self.assertEqual(ModMetadata.read(self.root / "mods" / "Source Alias").get("gameName"), "SkyrimSE")
+
+    def test_manifest_empty_fomod_object_installs_defaults(self):
+        archive = self.root / "downloads" / "manifest-fomod.zip"
+        archive.parent.mkdir(exist_ok=True)
+        config = b"""<config><moduleName>Manifest FOMOD</moduleName><requiredInstallFiles><files><file source="Data/base.txt" destination="base.txt" /></files></requiredInstallFiles></config>"""
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("fomod/ModuleConfig.xml", config)
+            output.writestr("Data/base.txt", b"base")
+        manifest = self.root / "manifest-fomod.json"
+        manifest.write_text(json.dumps({"mods": [{"path": "downloads/manifest-fomod.zip", "fomod": {}}]}), encoding="utf-8")
+
+        result = apply_manifest(self.instance, manifest)
+
+        self.assertEqual(result["mods"][0]["name"], "Manifest FOMOD")
+        self.assertTrue((self.root / "mods" / "Manifest FOMOD" / "base.txt").is_file())
+
+    def test_manifest_dry_run_validates_local_archives_without_writes(self):
+        manifest = self.root / "invalid-dry-run.json"
+        manifest.write_text(json.dumps({
+            "separators": [{"name": "Would Be Created"}],
+            "mods": [{"name": "Missing", "path": "downloads/missing.zip"}],
+        }), encoding="utf-8")
+
+        with self.assertRaises(Mo2Error):
+            apply_manifest(self.instance, manifest, dry_run=True)
+
+        self.assertFalse((self.root / "mods" / "Would Be Created_separator").exists())
 
     def test_nxm_reference_parsing(self):
         reference = parse_reference("nxm://skyrimspecialedition/mods/123/files/456?key=k&expires=99", self.instance)
@@ -269,6 +304,24 @@ class FeatureTests(unittest.TestCase):
         with self.assertRaises(Mo2Error):
             install_archive(self.instance, archive, "Default")
 
+    def test_archive_link_metadata_and_windows_device_paths_are_rejected(self):
+        class LinkItem:
+            filename = "linked"
+            is_symlink = True
+
+        self.assertTrue(_archive_item_is_link(LinkItem()))
+        archive = self.root / "downloads" / "device.zip"
+        archive.parent.mkdir(exist_ok=True)
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("Data/CON.txt", b"unsafe")
+        with self.assertRaises(Mo2Error):
+            install_archive(self.instance, archive, "Default")
+
+    def test_archive_expansion_limits_reject_oversized_members(self):
+        records = [{"name": "huge.bin", "size": MAX_ARCHIVE_BYTES + 1, "compressed": 1, "directory": False}]
+        with self.assertRaises(Mo2Error):
+            _validate_expansion(records, self.root / "extract")
+
     def test_profile_export_import_roundtrip(self):
         archive = self.root / "Default-profile.zip"
         exported = export_profile(self.instance, "Default", archive)
@@ -277,6 +330,27 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(imported["profile"], "Imported")
         self.assertTrue((self.root / "profiles" / "Imported" / "modlist.txt").exists())
 
+    def test_profile_export_refuses_output_inside_source_profile(self):
+        output = self.root / "profiles" / "Default" / "self.zip"
+        with self.assertRaises(Mo2Error):
+            export_profile(self.instance, "Default", output)
+        self.assertFalse(output.exists())
+
+    def test_profile_replace_validates_before_preserving_existing_profile(self):
+        profile = self.root / "profiles" / "Default"
+        marker = profile / "keep.txt"
+        marker.write_text("keep", encoding="utf-8")
+        archive = self.root / "invalid-profile.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("manifest.json", json.dumps({"format": "mo2cli-profile", "version": 1, "profile": "Default"}))
+            output.writestr("profile/modlist.txt", "+Replacement\n")
+            output.writestr("unexpected.txt", "invalid")
+
+        with self.assertRaises(Mo2Error):
+            import_profile(self.instance, archive, replace=True)
+
+        self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
+
     def test_rename_and_recoverable_remove(self):
         renamed = rename_mod(self.instance, "Patch Mod", "Renamed Patch")
         self.assertTrue(Path(renamed["path"]).is_dir())
@@ -284,6 +358,25 @@ class FeatureTests(unittest.TestCase):
         removed = remove_mod(self.instance, "Renamed Patch", yes=True)
         self.assertFalse((self.root / "mods" / "Renamed Patch").exists())
         self.assertTrue(Path(removed["trash"]).is_dir())
+
+    def test_failed_remove_restores_mod_and_profile(self):
+        modlist = self.root / "profiles" / "Default" / "modlist.txt"
+        original = modlist.read_text(encoding="utf-8")
+        with patch("mo2cli.installer.write_text", side_effect=OSError("simulated profile failure")):
+            with self.assertRaises(OSError):
+                remove_mod(self.instance, "Patch Mod", yes=True)
+        self.assertTrue((self.root / "mods" / "Patch Mod").is_dir())
+        self.assertEqual(modlist.read_text(encoding="utf-8"), original)
+
+    def test_failed_rename_restores_mod_and_profile(self):
+        modlist = self.root / "profiles" / "Default" / "modlist.txt"
+        original = modlist.read_text(encoding="utf-8")
+        with patch("mo2cli.installer.write_text", side_effect=OSError("simulated profile failure")):
+            with self.assertRaises(OSError):
+                rename_mod(self.instance, "Patch Mod", "Renamed Patch")
+        self.assertTrue((self.root / "mods" / "Patch Mod").is_dir())
+        self.assertFalse((self.root / "mods" / "Renamed Patch").exists())
+        self.assertEqual(modlist.read_text(encoding="utf-8"), original)
 
     def test_plugin_catalog_and_missing_master_check(self):
         payload = b"MAST" + struct.pack("<H", len(b"Missing.esm\0")) + b"Missing.esm\0"
@@ -356,7 +449,7 @@ class FeatureTests(unittest.TestCase):
 
     def test_tool_output_mod_is_registered_and_grouped(self):
         output = ensure_output_mod(self.instance, "Default", "BodySlide Output", "Tool Outputs")
-        self.assertEqual(output, self.root / "mods" / "BodySlide Output")
+        self.assertEqual(output.resolve(), (self.root / "mods" / "BodySlide Output").resolve())
         self.assertTrue((output / "meta.ini").is_file())
         self.assertIsNotNone(self.instance.profile_files("Default")[1].find("BodySlide Output"))
         self.assertIsNotNone(self.instance.profile_files("Default")[1].find("Tool Outputs_separator"))
