@@ -150,6 +150,8 @@ mo2 --instance "D:\MO2\Skyrim" --profile "Default" tools automate pandora
 mo2 --instance "D:\MO2\Skyrim" --profile "Default" tools automate bodyslide --preset "CBBE Curvy" --group "CBBE" --group "CBBE Vanilla Outfits" --trimorphs
 ```
 
+The workflow contract and planned xEdit/SSEEdit, xLODGen, TexGen, and DynDOLOD support are tracked in [TOOL_WORKFLOWS.md](https://github.com/fallenhak/mo2cli/blob/main/TOOL_WORKFLOWS.md).
+
 ## Manifest Format
 
 Manifest files can be written in JSON or TOML format. For Nexus mods, exact mod URL/NXM or `game` + `mod_id` can be specified. If no file ID is specified, the main file is selected.

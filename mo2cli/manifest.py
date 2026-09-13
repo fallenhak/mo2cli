@@ -7,6 +7,7 @@ from typing import Any
 
 from .downloads import fetch
 from .installer import install_archive
+from .journal import undo_last
 from .nexus import NexusReference, download_reference, game_domain, parse_reference
 from .separators import ensure as ensure_separator
 from .separators import group as group_separator
@@ -47,6 +48,26 @@ def _list(value: Any, key: str) -> list[dict[str, Any]]:
 def _profiles_for_manifest(instance: Instance, profile: str | None, root: dict[str, Any]) -> str:
     selected = profile or root.get("profile")
     return instance.profile_name(str(selected) if selected else None)
+
+
+def _remember_journal(result: dict[str, object], journal_ids: list[str]) -> None:
+    journal_id = result.get("journal_id")
+    if isinstance(journal_id, str):
+        journal_ids.append(journal_id)
+
+
+def _rollback(instance: Instance, journal_ids: list[str]) -> list[str]:
+    errors: list[str] = []
+    for expected in reversed(journal_ids):
+        try:
+            undone = undo_last(instance)
+        except (Mo2Error, OSError) as error:
+            errors.append(f"{expected}: {error}")
+            break
+        if undone.get("id") != expected:
+            errors.append(f"Expected journal {expected}, but undo selected {undone.get('id')}.")
+            break
+    return errors
 
 
 def apply(
@@ -131,6 +152,15 @@ def apply(
         result["groups"] = [{"separator": item.get("name"), "mods": item.get("mods", [])} for item in separator_specs if item.get("mods")]
         return result
 
+    for spec in separator_specs:
+        name = spec.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise Mo2Error("Manifest separator requires a name.")
+        if spec.get("before") and spec.get("after"):
+            raise Mo2Error(f"Manifest separator cannot specify both before and after: {name}")
+        if "mods" in spec and not isinstance(spec.get("mods"), list):
+            raise Mo2Error(f"Manifest separator mods must be a list: {name}")
+
     declared_separators = {
         str(item.get("name")).casefold()
         for item in separator_specs
@@ -141,16 +171,30 @@ def apply(
         for item in mod_specs
         if isinstance(item.get("separator"), str)
     }
+    journal_ids: list[str] = []
     for spec in separator_specs:
         name = spec.get("name")
         if not isinstance(name, str) or not name.strip():
             raise Mo2Error("Manifest separator requires a name.")
-        created = ensure_separator(instance, selected_profile, name, spec.get("before"), spec.get("after"))
+        try:
+            created = ensure_separator(instance, selected_profile, name, spec.get("before"), spec.get("after"))
+        except (Mo2Error, OSError) as error:
+            rollback_errors = _rollback(instance, journal_ids)
+            detail = f" Rollback incomplete: {'; '.join(rollback_errors)}" if rollback_errors else ""
+            raise Mo2Error(f"Manifest separator setup failed ({name}): {error}.{detail}") from error
         result["separators"].append(created)
+        _remember_journal(created, journal_ids)
     for name in sorted(referenced_separators - declared_separators):
         original = next((item.get("separator") for item in mod_specs if isinstance(item.get("separator"), str) and str(item.get("separator")).casefold() == name), None)
         if isinstance(original, str):
-            result["separators"].append(ensure_separator(instance, selected_profile, original))
+            try:
+                created = ensure_separator(instance, selected_profile, original)
+            except (Mo2Error, OSError) as error:
+                rollback_errors = _rollback(instance, journal_ids)
+                detail = f" Rollback incomplete: {'; '.join(rollback_errors)}" if rollback_errors else ""
+                raise Mo2Error(f"Manifest separator setup failed ({original}): {error}.{detail}") from error
+            result["separators"].append(created)
+            _remember_journal(created, journal_ids)
 
     resolved_cache: dict[str, str] = {}
     if auto_download and not dry_run:
@@ -255,11 +299,14 @@ def apply(
                 installed["download"] = download_result
             installed["separator"] = spec.get("separator")
             result["mods"].append(installed)
+            _remember_journal(installed, journal_ids)
         except (Mo2Error, OSError) as error:
             failure = {"name": spec.get("name"), "error": str(error)}
             errors.append(failure)
             if not continue_on_error:
-                raise Mo2Error(f"Manifest mod installation failed ({spec.get('name', '<unnamed>')}): {error}") from error
+                rollback_errors = _rollback(instance, journal_ids)
+                detail = f" Rollback incomplete: {'; '.join(rollback_errors)}" if rollback_errors else ""
+                raise Mo2Error(f"Manifest mod installation failed ({spec.get('name', '<unnamed>')}): {error}.{detail}") from error
 
     groups: dict[str, list[str]] = {}
     for spec in mod_specs:
@@ -275,6 +322,16 @@ def apply(
     for separator, names in groups.items():
         names = [name for name in names if name in successful_names]
         if names:
-            result["groups"].append(group_separator(instance, selected_profile, separator, names))
+            try:
+                grouped = group_separator(instance, selected_profile, separator, names)
+            except (Mo2Error, OSError) as error:
+                errors.append({"separator": separator, "error": str(error)})
+                if continue_on_error:
+                    continue
+                rollback_errors = _rollback(instance, journal_ids)
+                detail = f" Rollback incomplete: {'; '.join(rollback_errors)}" if rollback_errors else ""
+                raise Mo2Error(f"Manifest grouping failed ({separator}): {error}.{detail}") from error
+            result["groups"].append(grouped)
+            _remember_journal(grouped, journal_ids)
     result["errors"] = errors
     return result

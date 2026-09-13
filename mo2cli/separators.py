@@ -4,7 +4,7 @@ import datetime as dt
 import shutil
 from pathlib import Path
 
-from .formats import ModList, write_text
+from .formats import ModList, read_text_exact, write_text
 from .journal import record
 from .workspace import Instance, Mo2Error, _safe_name
 
@@ -61,7 +61,7 @@ def _backups(instance: Instance, profiles: list[str]) -> list[dict[str, str]]:
     result = []
     for name in profiles:
         path = instance.profiles_dir / name / "modlist.txt"
-        result.append({"path": str(path), "content": path.read_text(encoding="utf-8") if path.exists() else ""})
+        result.append({"path": str(path), "content": read_text_exact(path) if path.exists() else ""})
     return result
 
 
@@ -104,7 +104,7 @@ def create(instance: Instance, profile: str | None, name: str, before: str | Non
             model.add(internal, enabled=True)
             _place(model, internal, before, after)
             write_text(profile_path / "modlist.txt", model.render())
-        entry = record(instance, "separator_create", path=str(path), profiles=backups)
+        entry = record(instance, "separator_create", path=str(path), created_path=True, profiles=backups)
     except Exception:
         for backup in backups:
             write_text(Path(backup["path"]), backup["content"])
@@ -134,7 +134,7 @@ def ensure(instance: Instance, profile: str | None, name: str, before: str | Non
         model.add(actual_internal, enabled=True)
         _place(model, actual_internal, before, after)
         write_text(profile_path / "modlist.txt", model.render())
-        entry = record(instance, "separator_create", path=str(path), profiles=backup)
+        entry = record(instance, "separator_create", path=str(path), created_path=False, profiles=backup)
     except Exception:
         for item in backup:
             write_text(Path(item["path"]), item["content"])

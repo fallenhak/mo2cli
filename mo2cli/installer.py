@@ -20,7 +20,7 @@ from .fomod import (
 from .fomod_decisions import archive_fingerprint, context_snapshot, decision_path
 from .fomod_decisions import find as find_fomod_decision
 from .fomod_decisions import save as save_fomod_decision
-from .formats import ModList, write_text
+from .formats import ModList, read_text_exact, write_text
 from .journal import record
 from .metadata import IniDocument, ModMetadata
 from .workspace import Instance, Mo2Error, _safe_name
@@ -185,7 +185,7 @@ def _snapshot_text_files(paths: list[Path]) -> list[dict[str, object]]:
         {
             "path": str(path),
             "exists": path.is_file(),
-            "content": path.read_text(encoding="utf-8") if path.is_file() else "",
+            "content": read_text_exact(path) if path.is_file() else "",
         }
         for path in paths
     ]
@@ -404,7 +404,7 @@ def remove_mod(instance: Instance, name: str, purge: bool = False, yes: bool = F
     profile_backups = []
     for profile_name in instance.list_profiles():
         modlist_path = instance.profiles_dir / profile_name / "modlist.txt"
-        profile_backups.append({"path": str(modlist_path), "content": modlist_path.read_text(encoding="utf-8") if modlist_path.exists() else ""})
+        profile_backups.append({"path": str(modlist_path), "content": read_text_exact(modlist_path) if modlist_path.exists() else ""})
     moved_to = _trash_path(instance, path.name)
     moved_to.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(path), str(moved_to))
@@ -439,7 +439,7 @@ def rename_mod(instance: Instance, old: str, new: str) -> dict[str, object]:
     profile_backups = []
     for profile_name in instance.list_profiles():
         modlist_path = instance.profiles_dir / profile_name / "modlist.txt"
-        profile_backups.append({"path": str(modlist_path), "content": modlist_path.read_text(encoding="utf-8") if modlist_path.exists() else ""})
+        profile_backups.append({"path": str(modlist_path), "content": read_text_exact(modlist_path) if modlist_path.exists() else ""})
     source.rename(target)
     try:
         for profile_name in instance.list_profiles():

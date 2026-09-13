@@ -27,6 +27,7 @@ from mo2cli.plugins import analyze as analyze_plugins
 from mo2cli.plugins import catalog as plugin_catalog
 from mo2cli.profiles import export_profile, import_profile
 from mo2cli.separators import create as create_separator
+from mo2cli.separators import ensure as ensure_separator
 from mo2cli.separators import group as group_separator
 from mo2cli.separators import remove as remove_separator
 from mo2cli.tool_workflows import ensure_output_mod, run_bodyslide
@@ -107,6 +108,21 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(undo_last(self.instance)["undone"], "remove")
         self.assertTrue(Path(installed["path"]).is_dir())
 
+    def test_undo_refuses_to_overwrite_profile_changed_after_operation(self):
+        archive = self.root / "downloads" / "Undo-Freshness.zip"
+        archive.parent.mkdir(exist_ok=True)
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("Data/undo.txt", b"undo")
+        install_archive(self.instance, archive, "Default", name="Undo Freshness")
+        modlist = self.root / "profiles" / "Default" / "modlist.txt"
+        modlist.write_text(modlist.read_text(encoding="utf-8") + "+External Change\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(Mo2Error, "State changed"):
+            undo_last(self.instance)
+
+        self.assertTrue((self.root / "mods" / "Undo Freshness").is_dir())
+        self.assertIn("External Change", modlist.read_text(encoding="utf-8"))
+
     def test_separator_create_group_remove_and_undo(self):
         created = create_separator(self.instance, "Default", "Core")
         self.assertEqual(created["internal_name"], "Core_separator")
@@ -119,6 +135,18 @@ class FeatureTests(unittest.TestCase):
         self.assertFalse((self.root / "mods" / "Core_separator").exists())
         self.assertEqual(undo_last(self.instance)["undone"], "separator_remove")
         self.assertTrue((self.root / "mods" / "Core_separator").is_dir())
+
+    def test_undo_keeps_preexisting_separator_directory(self):
+        path = self.root / "mods" / "Existing_separator"
+        path.mkdir()
+        (path / "meta.ini").write_text("[General]\n", encoding="utf-8")
+
+        ensured = ensure_separator(self.instance, "Default", "Existing")
+
+        self.assertTrue(ensured["existing"])
+        self.assertEqual(undo_last(self.instance)["undone"], "separator_create")
+        self.assertTrue(path.is_dir())
+        self.assertIsNone(self.instance.profile_files("Default")[1].find("Existing_separator"))
 
     def test_manifest_applies_local_archive_and_separator_group(self):
         archive = self.root / "downloads" / "Manifest.zip"
@@ -180,6 +208,43 @@ class FeatureTests(unittest.TestCase):
             apply_manifest(self.instance, manifest, dry_run=True)
 
         self.assertFalse((self.root / "mods" / "Would Be Created_separator").exists())
+
+    def test_manifest_failure_rolls_back_prior_mods_and_separators(self):
+        archive = self.root / "downloads" / "first.zip"
+        archive.parent.mkdir(exist_ok=True)
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("Data/first.txt", b"first")
+        manifest = self.root / "rollback-manifest.json"
+        manifest.write_text(json.dumps({
+            "separators": [{"name": "Rollback Group"}],
+            "mods": [
+                {"name": "First Mod", "path": "downloads/first.zip", "separator": "Rollback Group"},
+                {"name": "Missing Mod", "path": "downloads/missing.zip"},
+            ],
+        }), encoding="utf-8")
+
+        with self.assertRaisesRegex(Mo2Error, "Manifest mod installation failed"):
+            apply_manifest(self.instance, manifest)
+
+        self.assertFalse((self.root / "mods" / "First Mod").exists())
+        self.assertFalse((self.root / "mods" / "Rollback Group_separator").exists())
+        names = [entry.name for entry in self.instance.profile_files("Default")[1].entries]
+        self.assertNotIn("First Mod", names)
+        self.assertNotIn("Rollback Group_separator", names)
+
+    def test_manifest_validates_all_separator_schema_before_mutation(self):
+        manifest = self.root / "invalid-separators.json"
+        manifest.write_text(json.dumps({
+            "separators": [
+                {"name": "Must Not Exist"},
+                {"name": "Invalid", "before": "Base Mod", "after": "Patch Mod"},
+            ],
+        }), encoding="utf-8")
+
+        with self.assertRaises(Mo2Error):
+            apply_manifest(self.instance, manifest)
+
+        self.assertFalse((self.root / "mods" / "Must Not Exist_separator").exists())
 
     def test_nxm_reference_parsing(self):
         reference = parse_reference("nxm://skyrimspecialedition/mods/123/files/456?key=k&expires=99", self.instance)

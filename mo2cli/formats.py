@@ -36,6 +36,11 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8-sig", errors="replace")
 
 
+def read_text_exact(path: Path, encoding: str = "utf-8") -> str:
+    with path.open("r", encoding=encoding, newline="") as source:
+        return source.read()
+
+
 def _same(left: str, right: str) -> bool:
     return left.casefold() == right.casefold()
 

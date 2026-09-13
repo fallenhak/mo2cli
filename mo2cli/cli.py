@@ -545,8 +545,7 @@ def run(args: argparse.Namespace) -> int:
         elif args.profiles_command == "delete":
             if not args.yes:
                 raise Mo2Error("Profile deletion requires --yes.")
-            instance.delete_profile(args.name)
-            print(f"Deleted: {args.name}")
+            _output(instance.delete_profile(args.name), args.json)
         elif args.profiles_command == "export":
             result = export_profile(instance, args.profile, args.output)
             _output(result, args.json)

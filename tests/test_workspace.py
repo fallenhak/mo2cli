@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mo2cli.cli import main
+from mo2cli.journal import undo_last
 from mo2cli.workspace import Instance, Mo2Error, _safe_name
 
 
@@ -101,6 +102,18 @@ class WorkspaceTests(unittest.TestCase):
         instance.delete_profile("Default")
         with self.assertRaises(Mo2Error):
             instance.delete_profile("Copy")
+
+    def test_selected_profile_delete_switches_and_can_be_undone(self):
+        instance = Instance.open(self.make_instance())
+        instance.create_profile("Copy", "Default")
+
+        deleted = instance.delete_profile("Default")
+
+        self.assertEqual(Instance.open(instance.root).selected_profile, "Copy")
+        self.assertTrue(Path(deleted["trash"]).is_dir())
+        self.assertEqual(undo_last(instance)["undone"], "profile_delete")
+        self.assertTrue((instance.profiles_dir / "Default").is_dir())
+        self.assertEqual(Instance.open(instance.root).selected_profile, "Default")
 
     def test_instance_open_finds_parent_directory(self):
         root = self.make_instance()

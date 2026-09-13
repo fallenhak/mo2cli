@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .formats import ModList, PluginList, write_text
+from .formats import ModList, PluginList, read_text_exact, write_text
 from .metadata import IniDocument, ModMetadata
 
 
@@ -323,7 +323,7 @@ class Instance:
                 next_section = re.search(r"(?im)^\[.+?\]\s*$", content[start:])
                 insert_at = start + (next_section.start() if next_section else len(content[start:]))
                 content = content[:insert_at].rstrip("\r\n") + f"\r\nselected_profile={name}\r\n" + content[insert_at:]
-        self.ini.write_text(content, encoding="utf-8", newline="")
+        write_text(self.ini, content)
         self.selected_profile = name
 
     def create_profile(self, name: str, source: str | None = None) -> Path:
@@ -345,11 +345,49 @@ class Instance:
             write_text(destination / "archives.txt", "")
         return destination
 
-    def delete_profile(self, name: str) -> None:
+    def delete_profile(self, name: str) -> dict[str, object]:
+        from .journal import record
+
         path = self.profile_path(name)
-        if len(self.list_profiles()) <= 1:
+        profiles = self.list_profiles()
+        if len(profiles) <= 1:
             raise Mo2Error("Cannot delete the last remaining profile.")
-        shutil.rmtree(path)
+        remaining = [profile for profile in profiles if profile.casefold() != path.name.casefold()]
+        selected_deleted = (self.selected_profile or "").casefold() == path.name.casefold()
+        ini_snapshot = {
+            "path": str(self.ini),
+            "exists": self.ini.is_file(),
+            "content": read_text_exact(self.ini) if self.ini.is_file() else "",
+        }
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        trash = self.base / ".mo2cli-trash" / f"profile-{path.name}-{stamp}"
+        trash.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(path), str(trash))
+        replacement = remaining[0] if selected_deleted else None
+        try:
+            if replacement:
+                self.write_selected_profile(replacement)
+            entry = record(
+                self,
+                "profile_delete",
+                destination=str(path),
+                trash=str(trash),
+                previous_selected=path.name if selected_deleted else self.selected_profile,
+                state_files=[ini_snapshot] if selected_deleted else [],
+            )
+        except Exception:
+            if trash.exists() and not path.exists():
+                shutil.move(str(trash), str(path))
+            if selected_deleted and ini_snapshot["exists"]:
+                write_text(self.ini, str(ini_snapshot["content"]))
+                self.selected_profile = path.name
+            raise
+        return {
+            "deleted": path.name,
+            "trash": str(trash),
+            "selected_profile": replacement or self.selected_profile,
+            "journal_id": entry["id"],
+        }
 
     def snapshot(self, requested: str | None = None) -> dict:
         path, mods, plugins = self.profile_files(requested)
