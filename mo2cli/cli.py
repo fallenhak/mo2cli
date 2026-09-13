@@ -14,7 +14,7 @@ from .journal import history as journal_history, undo_last
 from .manifest import apply as apply_manifest
 from .downloads import fetch as fetch_download, list_downloads
 from .game import run_game
-from .fomod import inspect_archive as inspect_fomod
+from .fomod import inspect_archive as inspect_fomod, load_fomod_plus_record
 from .fomod_decisions import list_decisions
 from .instance import initialize
 from .instances import list_instances
@@ -187,6 +187,11 @@ def build_parser() -> argparse.ArgumentParser:
     _common(archives)
     archives.add_argument("archive_command", choices=("list", "hash", "info", "fomod"))
     archives.add_argument("path")
+    archives.add_argument("--fomod-select", action="append", metavar="GROUP=PLUGIN[,PLUGIN...]", help="Apply selections while inspecting a FOMOD")
+    archives.add_argument("--fomod-flag", action="append", metavar="KEY=VALUE", help="Seed a FOMOD condition flag")
+    archives.add_argument("--fomod-game-version", help="Override the game version detected from the MO2 instance")
+    archives.add_argument("--fomod-plus-db", help="Replay and compare a FOMOD Plus JSON database record")
+    archives.add_argument("--fomod-plus-name", help="FOMOD Plus display name or Nexus mod ID")
 
     inis = sub.add_parser("inis", help="Inspect and edit profile INI/CFG files")
     _common(inis)
@@ -446,7 +451,21 @@ def run(args: argparse.Namespace) -> int:
         elif args.archive_command == "hash":
             print(sha256(path))
         elif args.archive_command == "fomod":
-            _output(inspect_fomod(path), args.json)
+            context_instance = Instance.open(args.instance) if args.instance else None
+            fomod_plus_record = None
+            if args.fomod_plus_db or args.fomod_plus_name:
+                if not args.fomod_plus_db or not args.fomod_plus_name:
+                    raise Mo2Error("--fomod-plus-db and --fomod-plus-name must be used together.")
+                fomod_plus_record = load_fomod_plus_record(args.fomod_plus_db, args.fomod_plus_name)
+            _output(inspect_fomod(
+                path,
+                instance=context_instance,
+                profile=args.profile,
+                selections=_parse_fomod_selections(args.fomod_select),
+                flags=_parse_key_values(args.fomod_flag, "FOMOD flag"),
+                game_version=args.fomod_game_version,
+                fomod_plus_record=fomod_plus_record,
+            ), args.json)
         else:
             entries = list_archive(path)
             _output({"path": str(path), "name": path.name, "stem": archive_stem(path), "size": path.stat().st_size, "files": len(entries)}, args.json)

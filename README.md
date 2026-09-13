@@ -27,7 +27,7 @@ A standalone, scriptable command-line interface (CLI) for managing Mod Organizer
   - MO2 custom executable listing and direct launching.
   - JSON snapshots, export tools, and system health checks (`doctor`).
 
-*Note: The CLI does not reproduce MO2's Qt interface. FOMOD installation is performed deterministically from command-line options or saved decisions. Always close MO2 before modifying files directly to avoid race conditions.*
+*Note: The CLI exposes the contextual FOMOD pages and choices as structured output rather than reproducing MO2's Qt interface. Installation is performed deterministically from command-line options or saved decisions. Always close MO2 before modifying files directly to avoid race conditions.*
 
 ## Installation
 
@@ -67,7 +67,13 @@ mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods install "
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods install "D:\Downloads\fomod-mod.zip" --allow-fomod --fomod-reuse always
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" --json mods fomod decisions
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods install "D:\Downloads\mod.zip" --name "My Mod"
-mo2 --json archive fomod "D:\Downloads\fomod-mod.zip"
+# Inspect the pages MO2 would show using the profile's game version and
+# Active/Inactive/Missing file state. Stable group keys are returned in `steps`.
+mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" --json archive fomod "D:\Downloads\fomod-mod.zip"
+# Preview an explicit choice without installing it.
+mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" --json archive fomod "D:\Downloads\fomod-mod.zip" --fomod-select "Main/Variant=Recommended A"
+# Replay and compare a FOMOD Plus record.
+mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" --json archive fomod "D:\Downloads\fomod-mod.zip" --fomod-plus-db "D:\Games\ModOrganizer\Skyrim\fomod.db" --fomod-plus-name "Example Mod"
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" --json mods show "My Mod"
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods metadata "My Mod" --set version=1.2.3
 

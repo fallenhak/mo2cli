@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import ctypes
 import json
 import os
 import re
@@ -14,6 +15,53 @@ from .metadata import IniDocument, ModMetadata
 
 class Mo2Error(RuntimeError):
     pass
+
+
+class _VsFixedFileInfo(ctypes.Structure):
+    _fields_ = [
+        ("dwSignature", ctypes.c_uint32),
+        ("dwStrucVersion", ctypes.c_uint32),
+        ("dwFileVersionMS", ctypes.c_uint32),
+        ("dwFileVersionLS", ctypes.c_uint32),
+        ("dwProductVersionMS", ctypes.c_uint32),
+        ("dwProductVersionLS", ctypes.c_uint32),
+        ("dwFileFlagsMask", ctypes.c_uint32),
+        ("dwFileFlags", ctypes.c_uint32),
+        ("dwFileOS", ctypes.c_uint32),
+        ("dwFileType", ctypes.c_uint32),
+        ("dwFileSubtype", ctypes.c_uint32),
+        ("dwFileDateMS", ctypes.c_uint32),
+        ("dwFileDateLS", ctypes.c_uint32),
+    ]
+
+
+def _windows_file_version(path: Path) -> str | None:
+    """Read a Windows executable's numeric file version without extra packages."""
+    if os.name != "nt" or not path.is_file():
+        return None
+    try:
+        version = ctypes.windll.version
+        size = version.GetFileVersionInfoSizeW(str(path), None)
+        if not size:
+            return None
+        buffer = ctypes.create_string_buffer(size)
+        if not version.GetFileVersionInfoW(str(path), 0, size, buffer):
+            return None
+        value = ctypes.c_void_p()
+        length = ctypes.c_uint()
+        if not version.VerQueryValueW(buffer, "\\", ctypes.byref(value), ctypes.byref(length)):
+            return None
+        info = ctypes.cast(value, ctypes.POINTER(_VsFixedFileInfo)).contents
+        if info.dwSignature != 0xFEEF04BD:
+            return None
+        return ".".join(str(part) for part in (
+            info.dwFileVersionMS >> 16,
+            info.dwFileVersionMS & 0xFFFF,
+            info.dwFileVersionLS >> 16,
+            info.dwFileVersionLS & 0xFFFF,
+        ))
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 def _qt_value(value: str) -> str:
@@ -174,6 +222,79 @@ class Instance:
             if index.isdigit():
                 grouped.setdefault(index, {})[field] = value
         return [grouped[index] | {"index": int(index)} for index in sorted(grouped, key=lambda item: int(item))]
+
+    def game_version(self) -> str | None:
+        if self.game_path is None:
+            return None
+        game_key = self.game_name.casefold().strip()
+        executable_names = {
+            "skyrim special edition": ("SkyrimSE.exe",),
+            "skyrim special edition (steam)": ("SkyrimSE.exe",),
+            "skyrim": ("TESV.exe",),
+            "fallout 4": ("Fallout4.exe",),
+            "fallout new vegas": ("FalloutNV.exe",),
+            "oblivion": ("Oblivion.exe",),
+            "starfield": ("Starfield.exe",),
+        }.get(game_key, ())
+        for name in executable_names:
+            detected = _windows_file_version(self.game_path / name)
+            if detected:
+                return detected
+        return None
+
+    def script_extender_version(self) -> str | None:
+        for executable in self.executables():
+            title = str(executable.get("title", "")).casefold()
+            binary = Path(str(executable.get("binary", "")))
+            if any(token in title for token in ("skse", "fose", "nvse", "obse", "f4se")):
+                detected = _windows_file_version(binary)
+                if detected:
+                    return detected
+        return None
+
+    def fomod_file_states(self, requested: str | None, names: set[str]) -> dict[str, str]:
+        """Resolve FOMOD file dependencies using MO2 Active/Inactive/Missing states."""
+        profile_path, modlist, plugin_list = self.profile_files(requested)
+        loadorder = PluginList.read(profile_path / "loadorder.txt")
+        plugin_states = {entry.name.casefold(): entry.enabled for entry in plugin_list.entries}
+        for entry in loadorder.entries:
+            plugin_states.setdefault(entry.name.casefold(), True)
+        active_roots: list[Path] = []
+        if self.game_path is not None:
+            game_data = self.game_path / "Data"
+            active_roots.append(game_data if game_data.is_dir() else self.game_path)
+        active_roots.extend(self.active_mod_roots(requested))
+        inactive_roots: list[Path] = []
+        for entry in modlist.entries:
+            if entry.enabled or entry.foreign:
+                continue
+            root = self._listed_mod_dir(entry.name)
+            if root is not None and root.is_dir():
+                inactive_roots.append(root)
+
+        def exists(root: Path, raw_name: str) -> bool:
+            normalized = raw_name.replace("\\", "/").lstrip("/")
+            parts = list(Path(normalized).parts)
+            if parts and parts[0].casefold() == "data":
+                parts.pop(0)
+            if not parts or any(part in {".", ".."} for part in parts):
+                return False
+            return root.joinpath(*parts).is_file()
+
+        states: dict[str, str] = {}
+        for name in names:
+            key = name.casefold()
+            present_in_active = any(exists(root, name) for root in active_roots)
+            is_plugin = Path(name).suffix.casefold() in {".esm", ".esp", ".esl"}
+            if present_in_active and is_plugin:
+                states[key] = "Active" if plugin_states.get(Path(name).name.casefold(), False) else "Inactive"
+            elif present_in_active:
+                states[key] = "Active"
+            elif any(exists(root, name) for root in inactive_roots):
+                states[key] = "Inactive"
+            else:
+                states[key] = "Missing"
+        return states
 
     def write_selected_profile(self, name: str) -> None:
         _safe_name(name)

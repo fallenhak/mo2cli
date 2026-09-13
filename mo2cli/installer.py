@@ -8,7 +8,7 @@ from typing import Any
 
 from .archives import archive_stem, extract_to_temp
 from .formats import ModList, write_text
-from .fomod import apply_plan, config_hash, module_name, plan_extracted, public_plan, reconcile_selections
+from .fomod import apply_plan, config_hash, dependency_files, module_name, plan_extracted, public_plan, reconcile_selections
 from .fomod_decisions import archive_fingerprint, context_snapshot, find as find_fomod_decision, save as save_fomod_decision
 from .journal import record
 from .metadata import IniDocument, ModMetadata
@@ -202,7 +202,9 @@ def install_archive(
             raise Mo2Error("Archive contains FOMOD; choices cannot be made automatically. Use --allow-fomod to proceed.")
         plan = None
         if has_fomod:
-            file_states = {str(item["path"]): "Active" for item in instance.virtual_files(profile)}
+            file_states = instance.fomod_file_states(profile, dependency_files(extracted.root))
+            effective_game_version = fomod_game_version or instance.game_version()
+            script_extender_version = instance.script_extender_version()
             effective_selections = fomod_selections
             decision_source = "new"
             decision_warnings: list[str] = []
@@ -235,9 +237,23 @@ def install_archive(
                             decision_warnings.append("Active mod context during recording has changed.")
                     else:
                         decision_source = "saved-declined"
-            plan = plan_extracted(extracted.root, selections=effective_selections, flags=fomod_flags, file_states=file_states, game_version=fomod_game_version)
+            plan = plan_extracted(
+                extracted.root,
+                selections=effective_selections,
+                flags=fomod_flags,
+                file_states=file_states,
+                game_version=effective_game_version,
+                script_extender_version=script_extender_version,
+            )
             if decision_source == "reconciled" and plan.get("errors"):
-                fallback = plan_extracted(extracted.root, selections=None, flags=fomod_flags, file_states=file_states, game_version=fomod_game_version)
+                fallback = plan_extracted(
+                    extracted.root,
+                    selections=None,
+                    flags=fomod_flags,
+                    file_states=file_states,
+                    game_version=effective_game_version,
+                    script_extender_version=script_extender_version,
+                )
                 if not fallback.get("errors"):
                     plan = fallback
                     decision_source = "reconciled-defaults"
@@ -247,7 +263,7 @@ def install_archive(
             suggested_name = str(plan.get("module_name") or "").strip()
             if name is None and suggested_name:
                 mod_name = suggested_name
-            decision_payload = _decision_payload(instance, profile, archive_path, config_digest, plan, mod_name, fomod_flags, fomod_game_version, separator, decision_source, decision_warnings)
+            decision_payload = _decision_payload(instance, profile, archive_path, config_digest, plan, mod_name, fomod_flags, effective_game_version, separator, decision_source, decision_warnings)
         else:
             root = _source_root(extracted.root, source)
         _safe_name(mod_name)
