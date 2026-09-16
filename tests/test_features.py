@@ -654,6 +654,14 @@ class FeatureTests(unittest.TestCase):
         self.assertIsNotNone(self.instance.profile_files("Default")[1].find("BodySlide Output"))
         self.assertIsNotNone(self.instance.profile_files("Default")[1].find("Tool Outputs_separator"))
 
+    def test_tool_output_mod_does_not_invent_separator_and_gets_highest_priority(self):
+        output = ensure_output_mod(self.instance, "Default", "Pandora Output")
+        model = self.instance.profile_files("Default")[1]
+
+        self.assertEqual(output.resolve(), (self.root / "mods" / "Pandora Output").resolve())
+        self.assertIsNone(model.find("18. _____________________________________ TOOL OUTPUTS ___________________________________________separator"))
+        self.assertEqual(model.entries[0].name, "Pandora Output")
+
     def test_register_executable_adds_and_replaces_mo2_tool(self):
         expected_index = max((int(item["index"]) for item in self.instance.executables()), default=0) + 1
         binary = self.root / "BodySlide.exe"
@@ -663,6 +671,8 @@ class FeatureTests(unittest.TestCase):
         self.assertFalse(result["replaced"])
         registered = next(item for item in self.instance.executables() if item["title"] == "BodySlide")
         self.assertEqual(registered["index"], expected_index)
+        self.assertNotIn("\\", str(registered["binary"]))
+        self.assertNotIn("\\", str(registered["workingDirectory"]))
 
         replacement = self.root / "BodySlide-new.exe"
         replacement.write_bytes(b"test")

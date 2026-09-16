@@ -9,7 +9,6 @@ from .tools import find_executable
 from .usvfs import run as run_vfs
 from .workspace import Instance, Mo2Error, _safe_name
 
-TOOL_OUTPUTS_SEPARATOR = "18. _____________________________________ TOOL OUTPUTS __________________________________________"
 PANDORA_TITLE = "Pandora Behaviour Engine+"
 BODYSLIDE_TITLE = "BodySlide"
 
@@ -27,7 +26,7 @@ def _output_metadata(instance: Instance, path: Path) -> None:
     write_text(path / "meta.ini", "[General]\r\nmodid=0\r\nversion=\r\nnewestVersion=\r\ncategory=0\r\ninstallationFile=\r\ngameName=" + game_name + "\r\n")
 
 
-def ensure_output_mod(instance: Instance, profile: str | None, name: str, separator: str = TOOL_OUTPUTS_SEPARATOR) -> Path:
+def ensure_output_mod(instance: Instance, profile: str | None, name: str, separator: str | None = None) -> Path:
     """Create/register an output mod without deleting an existing build."""
     _safe_name(name)
     path = _find_mod_dir(instance, name)
@@ -42,15 +41,22 @@ def ensure_output_mod(instance: Instance, profile: str | None, name: str, separa
     profile_path = instance.profiles_dir / profile_name
     modlist_path = profile_path / "modlist.txt"
     model = ModList.read(modlist_path)
-    if model.find(name) is None:
+    created_entry = model.find(name) is None
+    if created_entry:
         model.add(name, enabled=True)
+        # Generated behavior/body outputs must win conflicts. MO2 stores the
+        # visible left pane in reverse, so move a newly-created output to the
+        # last (highest-priority) visible position. Existing outputs retain
+        # the user's carefully chosen placement.
+        model.move_ui(name, len(model.entries) - 1)
         write_text(modlist_path, model.render())
     elif not model.find(name).enabled:
         model.set_enabled(name, True)
         write_text(modlist_path, model.render())
 
-    ensure_separator(instance, profile_name, separator)
-    group_separator(instance, profile_name, separator, [name])
+    if separator:
+        ensure_separator(instance, profile_name, separator)
+        group_separator(instance, profile_name, separator, [name])
     return path
 
 
@@ -77,7 +83,7 @@ def run_pandora(
     instance: Instance,
     profile: str | None,
     output_mod: str = "Pandora Output",
-    separator: str = TOOL_OUTPUTS_SEPARATOR,
+    separator: str | None = None,
     tesv: str | None = None,
     auto_run: bool = True,
     auto_close: bool = True,
@@ -112,7 +118,7 @@ def run_bodyslide(
     preset: str,
     groups: list[str],
     output_mod: str = "BodySlide Output",
-    separator: str = TOOL_OUTPUTS_SEPARATOR,
+    separator: str | None = None,
     trimorphs: bool = False,
     usvfs_dir: str | None = None,
     destination: str | None = None,

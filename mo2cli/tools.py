@@ -37,10 +37,12 @@ def register_executable(
         raise Mo2Error(f"MO2 executable already exists: {clean_title}. Use --replace to update it.")
     indexes = [int(item["index"]) for item in instance.executables()]
     index = int(existing["index"]) if existing is not None else (max(indexes, default=0) + 1)
+    # QSettings treats backslashes in INI values as escape characters. Use
+    # forward slashes so MO2 can safely load and save Windows tool paths.
     fields: dict[str, object] = {
         "title": clean_title,
-        "binary": str(binary_path),
-        "workingDirectory": str(working_path),
+        "binary": binary_path.as_posix(),
+        "workingDirectory": working_path.as_posix(),
         "arguments": arguments,
         "hide": False,
         "ownicon": True,
