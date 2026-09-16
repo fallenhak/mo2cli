@@ -33,6 +33,11 @@ def _separator_candidates(name: str) -> list[str]:
     for display in (_display_name(exact), _display_name(raw).rstrip()):
         for suffix in ("_separator", "separator"):
             add(f"{display}{suffix}")
+            # MO2 lists commonly use a display name with a trailing space,
+            # which becomes a space immediately before the internal suffix.
+            # Treat the visually identical trimmed display name as the same
+            # separator instead of creating a duplicate at the end of a list.
+            add(f"{display.rstrip()} {suffix}")
     return candidates
 
 

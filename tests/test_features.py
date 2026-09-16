@@ -172,6 +172,23 @@ class FeatureTests(unittest.TestCase):
         index = names.index(internal)
         self.assertEqual(names[index - 1:index + 1], ["Patch Mod", internal])
 
+    def test_existing_separator_with_trailing_display_space_resolves_from_trimmed_name(self):
+        display = "Existing Trimmed Group "
+        internal = f"{display}_separator"
+        path = self.root / "mods" / internal
+        path.mkdir()
+        (path / "meta.ini").write_text("[General]\n", encoding="utf-8")
+        modlist_path = self.root / "profiles" / "Default" / "modlist.txt"
+        model = ModList.read(modlist_path)
+        model.add(internal)
+        modlist_path.write_text(model.render(), encoding="utf-8")
+
+        ensured = ensure_separator(self.instance, "Default", display.rstrip())
+
+        self.assertTrue(ensured["existing"])
+        self.assertEqual(ensured["internal_name"], internal)
+        self.assertFalse((self.root / "mods" / "Existing Trimmed Group_separator").exists())
+
     def test_manifest_applies_local_archive_and_separator_group(self):
         archive = self.root / "downloads" / "Manifest.zip"
         archive.parent.mkdir(exist_ok=True)
