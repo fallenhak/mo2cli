@@ -83,19 +83,29 @@ def _active_plugin_files(instance: Instance, profile: str | None) -> dict[str, P
     return result
 
 
-def sync_plugin_lists(instance: Instance, profile: str | None = None) -> dict[str, object]:
+def sync_plugin_lists(
+    instance: Instance,
+    profile: str | None = None,
+    candidates: list[str] | None = None,
+) -> dict[str, object]:
     profile_path = instance.profile_path(profile)
     plugins_path = profile_path / "plugins.txt"
     loadorder_path = profile_path / "loadorder.txt"
     plugins = PluginList.read(plugins_path)
     loadorder = PluginList.read(loadorder_path)
     active_files = _active_plugin_files(instance, profile)
+    if candidates is not None:
+        wanted = {name.casefold() for name in candidates}
+        active_files = {key: path for key, path in active_files.items() if key in wanted}
     known_plugins = {entry.name.casefold() for entry in plugins.entries}
     known_loadorder = {entry.name.casefold() for entry in loadorder.entries}
-    missing = [path.name for key, path in active_files.items() if key not in known_plugins or key not in known_loadorder]
+    missing = [
+        path.name
+        for key, path in active_files.items()
+        if key not in known_plugins and key not in known_loadorder
+    ]
     missing = list(dict.fromkeys(missing))
-    enable_existing = [entry for entry in plugins.entries if entry.name.casefold() in active_files and not entry.enabled]
-    if not missing and not enable_existing:
+    if not missing:
         return {"profile": profile_path.name, "added": [], "changed": False}
     backup_dir = profile_path / ".mo2cli-backups" / f"plugins-sync-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -107,8 +117,6 @@ def sync_plugin_lists(instance: Instance, profile: str | None = None) -> dict[st
             plugins.lines.append(PluginEntry(name, True))
         if loadorder.find(name) is None:
             loadorder.lines.append(PluginEntry(name, False))
-    for entry in enable_existing:
-        entry.enabled = True
     headers = {key: parse_header(path) for key, path in active_files.items()}
     for _ in range(len(loadorder.entries) + 1):
         changed = False
@@ -133,7 +141,7 @@ def sync_plugin_lists(instance: Instance, profile: str | None = None) -> dict[st
             break
     write_text(plugins_path, plugins.render())
     write_text(loadorder_path, loadorder.render())
-    return {"profile": profile_path.name, "added": missing, "enabled": [entry.name for entry in enable_existing], "changed": True, "backup": str(backup_dir)}
+    return {"profile": profile_path.name, "added": missing, "enabled": [], "changed": True, "backup": str(backup_dir)}
 
 
 def remove_plugin_entries(instance: Instance, profile: str | None, names: list[str]) -> dict[str, object]:
@@ -190,6 +198,8 @@ def analyze(instance: Instance, profile: str | None = None) -> list[dict[str, ob
     issues: list[dict[str, object]] = []
     for index, name in enumerate(order):
         key = name.casefold()
+        if enabled.get(key, True) is False:
+            continue
         if key not in files:
             issues.append({"level": "error", "code": "missing-plugin-file", "plugin": name})
             continue
@@ -206,7 +216,11 @@ def analyze(instance: Instance, profile: str | None = None) -> list[dict[str, ob
                 issues.append({"level": "error", "code": "master-after-plugin", "plugin": name, "master": master})
             elif enabled.get(master_key, True) is False and enabled.get(key, False):
                 issues.append({"level": "error", "code": "disabled-master", "plugin": name, "master": master})
-    graph = {name.casefold(): [master.casefold() for master in parsed[name.casefold()].masters] for name in order if name.casefold() in parsed}
+    graph = {
+        name.casefold(): [master.casefold() for master in parsed[name.casefold()].masters]
+        for name in order
+        if enabled.get(name.casefold(), True) and name.casefold() in parsed
+    }
     visiting: set[str] = set()
     visited: set[str] = set()
 

@@ -35,7 +35,7 @@ from .separators import group as group_separator
 from .separators import list_separators
 from .separators import remove as remove_separator
 from .tool_workflows import run_bodyslide, run_pandora
-from .tools import run_executable
+from .tools import register_executable, remove_executable, run_executable
 from .usvfs import cleanup as cleanup_vfs
 from .usvfs import run as run_vfs
 from .usvfs import status as vfs_status
@@ -226,6 +226,14 @@ def build_parser() -> argparse.ArgumentParser:
     _common(tools)
     tls = tools.add_subparsers(dest="tools_command", required=True)
     tls.add_parser("list")
+    tool_register = tls.add_parser("register", help="Register or update an MO2 custom executable")
+    tool_register.add_argument("title")
+    tool_register.add_argument("binary")
+    tool_register.add_argument("--working-directory")
+    tool_register.add_argument("--arguments", default="")
+    tool_register.add_argument("--replace", action="store_true")
+    tool_remove = tls.add_parser("remove", help="Remove an MO2 custom executable by index or unique title")
+    tool_remove.add_argument("target")
     tool_run = tls.add_parser("run", help="Run executable directly without USVFS injection")
     tool_run.add_argument("title")
     tool_run.add_argument("extra", nargs="*")
@@ -696,6 +704,10 @@ def run(args: argparse.Namespace) -> int:
     elif command == "tools":
         if args.tools_command == "list":
             _output(instance.executables(), args.json)
+        elif args.tools_command == "register":
+            _output(register_executable(instance, args.title, args.binary, args.working_directory, args.arguments, args.replace), args.json)
+        elif args.tools_command == "remove":
+            _output(remove_executable(instance, args.target), args.json)
         elif args.tools_command == "run":
             _output(run_executable(instance, args.title, args.extra, args.wait), args.json)
         elif args.automation == "pandora":
@@ -746,7 +758,7 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
     if command == "files":
         return args.files_command == "materialize"
     if command == "tools":
-        return args.tools_command == "automate" and not args.dry_run
+        return args.tools_command in {"register", "remove"} or (args.tools_command == "automate" and not args.dry_run)
     if command == "downloads":
         return args.downloads_command in {"sync", "mark-installed", "fetch"}
     if command == "manifest":

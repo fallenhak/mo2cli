@@ -6,6 +6,8 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+import py7zr
+
 from mo2cli.archives import (
     MAX_ARCHIVE_BYTES,
     _archive_item_is_link,
@@ -25,12 +27,14 @@ from mo2cli.metadata import ModMetadata, sync_metadata
 from mo2cli.nexus import NexusReference, download_reference, parse_reference
 from mo2cli.plugins import analyze as analyze_plugins
 from mo2cli.plugins import catalog as plugin_catalog
+from mo2cli.plugins import sync_plugin_lists
 from mo2cli.profiles import export_profile, import_profile
 from mo2cli.separators import create as create_separator
 from mo2cli.separators import ensure as ensure_separator
 from mo2cli.separators import group as group_separator
 from mo2cli.separators import remove as remove_separator
 from mo2cli.tool_workflows import ensure_output_mod, run_bodyslide
+from mo2cli.tools import register_executable, remove_executable
 from mo2cli.usvfs import status as usvfs_status
 from mo2cli.workspace import Instance, Mo2Error
 
@@ -147,6 +151,26 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(undo_last(self.instance)["undone"], "separator_create")
         self.assertTrue(path.is_dir())
         self.assertIsNone(self.instance.profile_files("Default")[1].find("Existing_separator"))
+
+    def test_existing_separator_with_trailing_display_space_resolves(self):
+        display = "Existing Group "
+        internal = f"{display}_separator"
+        path = self.root / "mods" / internal
+        path.mkdir()
+        (path / "meta.ini").write_text("[General]\n", encoding="utf-8")
+        modlist_path = self.root / "profiles" / "Default" / "modlist.txt"
+        model = ModList.read(modlist_path)
+        model.add(internal)
+        modlist_path.write_text(model.render(), encoding="utf-8")
+
+        ensured = ensure_separator(self.instance, "Default", display)
+        self.assertTrue(ensured["existing"])
+        self.assertEqual(ensured["internal_name"], internal)
+
+        group_separator(self.instance, "Default", internal, ["Patch Mod"])
+        names = [entry.name for entry in self.instance.profile_files("Default")[1].entries]
+        index = names.index(internal)
+        self.assertEqual(names[index - 1:index + 1], ["Patch Mod", internal])
 
     def test_manifest_applies_local_archive_and_separator_group(self):
         archive = self.root / "downloads" / "Manifest.zip"
@@ -297,6 +321,35 @@ class FeatureTests(unittest.TestCase):
         self.assertTrue((self.root / "mods" / "Remote Mod" / "remote.txt").exists())
         self.assertTrue((self.root / "mods" / "Remote Group_separator").is_dir())
 
+    def test_mod_install_uses_existing_separator_with_trailing_display_space(self):
+        display = "Existing CLI Group "
+        internal = f"{display}_separator"
+        separator_path = self.root / "mods" / internal
+        separator_path.mkdir()
+        (separator_path / "meta.ini").write_text("[General]\n", encoding="utf-8")
+        modlist_path = self.root / "profiles" / "Default" / "modlist.txt"
+        model = ModList.read(modlist_path)
+        model.add(internal)
+        modlist_path.write_text(model.render(), encoding="utf-8")
+        archive = self.root / "downloads" / "Existing-Separator.zip"
+        archive.parent.mkdir(exist_ok=True)
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("Data/installed.txt", b"installed")
+
+        result = main([
+            "--instance", str(self.root),
+            "--profile", "Default",
+            "mods", "install", str(archive),
+            "--name", "Installed Under Existing",
+            "--separator", display,
+        ])
+
+        self.assertEqual(result, 0)
+        self.assertFalse((self.root / "mods" / "Existing CLI Group_separator").exists())
+        names = [entry.name for entry in self.instance.profile_files("Default")[1].entries]
+        index = names.index(internal)
+        self.assertEqual(names[index - 1:index + 1], ["Installed Under Existing", internal])
+
     def test_fomod_requires_explicit_opt_in(self):
         archive = self.root / "downloads" / "Fomod.zip"
         archive.parent.mkdir(exist_ok=True)
@@ -387,6 +440,22 @@ class FeatureTests(unittest.TestCase):
         with self.assertRaises(Mo2Error):
             _validate_expansion(records, self.root / "extract")
 
+    def test_solid_7z_zero_packed_members_are_treated_as_unknown(self):
+        source = self.root / "solid-source"
+        source.mkdir()
+        payload = b"community-shaders" * 70_000
+        (source / "first.bin").write_bytes(payload)
+        (source / "second.bin").write_bytes(payload)
+        archive_path = self.root / "solid.7z"
+        with py7zr.SevenZipFile(archive_path, mode="w") as archive:
+            archive.write(source / "first.bin", "first.bin")
+            archive.write(source / "second.bin", "second.bin")
+
+        records = list_archive(archive_path)
+
+        self.assertTrue(any(item["compressed"] is None for item in records))
+        _validate_expansion(records, self.root / "solid-extract")
+
     def test_profile_export_import_roundtrip(self):
         archive = self.root / "Default-profile.zip"
         exported = export_profile(self.instance, "Default", archive)
@@ -455,12 +524,61 @@ class FeatureTests(unittest.TestCase):
         )
         plugin = self.root / "mods" / "Patch Mod" / "Test.esp"
         plugin.write_bytes(header + payload)
+        (self.root / "profiles" / "Default" / "plugins.txt").write_text(
+            "*Skyrim.esm\n*Test.esp\n",
+            encoding="utf-8",
+        )
         catalog = plugin_catalog(self.instance, "Default")
         test_plugin = next(item for item in catalog if item["name"] == "Test.esp")
         self.assertEqual(test_plugin["masters"], ["Missing.esm"])
         self.assertEqual(test_plugin["form_version"], 44)
         issues = analyze_plugins(self.instance, "Default")
         self.assertTrue(any(issue["code"] == "missing-master" for issue in issues))
+
+    def test_plugin_sync_preserves_existing_disabled_state(self):
+        plugin = self.root / "mods" / "Patch Mod" / "Disabled.esp"
+        plugin.write_bytes(b"not needed for sync")
+        profile = self.root / "profiles" / "Default"
+        (profile / "plugins.txt").write_text("*Skyrim.esm\nTest.esp\nDisabled.esp\n", encoding="utf-8")
+        (profile / "loadorder.txt").write_text("Skyrim.esm\nTest.esp\nDisabled.esp\n", encoding="utf-8")
+
+        result = sync_plugin_lists(self.instance, "Default")
+
+        self.assertFalse(result["changed"])
+        self.assertIn("\nDisabled.esp\n", (profile / "plugins.txt").read_text(encoding="utf-8"))
+
+    def test_plugin_sync_preserves_loadorder_only_forced_plugins(self):
+        profile = self.root / "profiles" / "Default"
+        (profile / "plugins.txt").write_text("*Test.esp\n", encoding="utf-8")
+        (profile / "loadorder.txt").write_text("Skyrim.esm\nTest.esp\n", encoding="utf-8")
+
+        result = sync_plugin_lists(self.instance, "Default")
+
+        self.assertFalse(result["changed"])
+        self.assertEqual((profile / "plugins.txt").read_text(encoding="utf-8"), "*Test.esp\n")
+
+    def test_plugin_sync_can_be_limited_to_new_install_candidates(self):
+        profile = self.root / "profiles" / "Default"
+        extra = self.root / "mods" / "Patch Mod" / "OptionalAlternate.esp"
+        extra.write_bytes(b"not needed for sync")
+        new_plugin = self.root / "mods" / "Patch Mod" / "NewInstall.esp"
+        new_plugin.write_bytes(b"not needed for sync")
+
+        result = sync_plugin_lists(self.instance, "Default", ["NewInstall.esp"])
+
+        self.assertEqual(result["added"], ["NewInstall.esp"])
+        contents = (profile / "plugins.txt").read_text(encoding="utf-8")
+        self.assertIn("*NewInstall.esp", contents)
+        self.assertNotIn("OptionalAlternate.esp", contents)
+
+    def test_plugin_check_ignores_disabled_stale_or_missing_master_entries(self):
+        profile = self.root / "profiles" / "Default"
+        (profile / "plugins.txt").write_text("*Skyrim.esm\nDisabledMissing.esp\n", encoding="utf-8")
+        (profile / "loadorder.txt").write_text("Skyrim.esm\nDisabledMissing.esp\n", encoding="utf-8")
+
+        issues = analyze_plugins(self.instance, "Default")
+
+        self.assertFalse(any(issue.get("plugin") == "DisabledMissing.esp" for issue in issues))
 
     def test_loadorder_only_plugins_are_implicitly_enabled(self):
         profile = self.root / "profiles" / "Default"
@@ -518,6 +636,36 @@ class FeatureTests(unittest.TestCase):
         self.assertTrue((output / "meta.ini").is_file())
         self.assertIsNotNone(self.instance.profile_files("Default")[1].find("BodySlide Output"))
         self.assertIsNotNone(self.instance.profile_files("Default")[1].find("Tool Outputs_separator"))
+
+    def test_register_executable_adds_and_replaces_mo2_tool(self):
+        expected_index = max((int(item["index"]) for item in self.instance.executables()), default=0) + 1
+        binary = self.root / "BodySlide.exe"
+        binary.write_bytes(b"test")
+        result = register_executable(self.instance, "BodySlide", str(binary))
+        self.assertEqual(result["index"], expected_index)
+        self.assertFalse(result["replaced"])
+        registered = next(item for item in self.instance.executables() if item["title"] == "BodySlide")
+        self.assertEqual(registered["index"], expected_index)
+
+        replacement = self.root / "BodySlide-new.exe"
+        replacement.write_bytes(b"test")
+        updated = register_executable(self.instance, "BodySlide", str(replacement), replace=True)
+        self.assertEqual(updated["index"], expected_index)
+        self.assertTrue(updated["replaced"])
+        registered = next(item for item in self.instance.executables() if item["title"] == "BodySlide")
+        self.assertEqual(Path(str(registered["binary"])), replacement)
+
+    def test_remove_executable_by_index(self):
+        binary = self.root / "BrokenTool.exe"
+        binary.write_bytes(b"test")
+        registered = register_executable(self.instance, "Broken Tool", str(binary))
+
+        removed = remove_executable(self.instance, str(registered["index"]))
+
+        self.assertEqual(removed["index"], registered["index"])
+        self.assertEqual(removed["title"], "Broken Tool")
+        self.assertGreater(removed["removed_fields"], 0)
+        self.assertNotIn(registered["index"], [item["index"] for item in self.instance.executables()])
 
     def test_bodyslide_dry_run_builds_official_command_line(self):
         with patch(

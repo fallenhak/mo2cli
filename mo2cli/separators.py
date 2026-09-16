@@ -17,13 +17,22 @@ def _display_name(name: str) -> str:
 
 
 def _separator_candidates(name: str) -> list[str]:
+    exact = name
     raw = name.strip()
-    display = _display_name(raw).rstrip()
-    candidates = [raw]
-    for suffix in ("_separator", "separator"):
-        candidate = f"{display}{suffix}"
+    candidates: list[str] = []
+
+    def add(candidate: str) -> None:
         if candidate.casefold() not in {item.casefold() for item in candidates}:
             candidates.append(candidate)
+
+    # Preserve the exact input first. Some existing MO2 separators contain a
+    # significant space immediately before the internal ``_separator`` suffix,
+    # and ``list`` exposes that same space in their display name.
+    add(exact)
+    add(raw)
+    for display in (_display_name(exact), _display_name(raw).rstrip()):
+        for suffix in ("_separator", "separator"):
+            add(f"{display}{suffix}")
     return candidates
 
 
@@ -188,7 +197,6 @@ def remove(instance: Instance, profile: str | None, name: str, purge: bool = Fal
 def group(instance: Instance, profile: str | None, separator: str, names: list[str]) -> dict[str, object]:
     if not names:
         raise Mo2Error("At least one mod required for group.")
-    internal = internal_name(separator)
     profile_name = instance.profile_name(profile)
     profile_path = instance.profiles_dir / profile_name
     modlist_path = profile_path / "modlist.txt"
@@ -196,7 +204,9 @@ def group(instance: Instance, profile: str | None, separator: str, names: list[s
     model = ModList.read(modlist_path)
     separator_entry = _find_separator_entry(model, separator)
     if separator_entry is None:
+        internal = internal_name(separator)
         raise Mo2Error(f"Separator not found: {_display_name(internal)}")
+    internal = separator_entry.name
     for name in names:
         if model.find(name) is None:
             raise Mo2Error(f"Mod not found in profile: {name}")

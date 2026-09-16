@@ -353,7 +353,12 @@ def install_archive(
         write_text(profile_path / "modlist.txt", modlist.render())
         from .plugins import sync_plugin_lists
 
-        sync_plugin_lists(instance, profile)
+        installed_plugins = [
+            path.name
+            for path in destination.rglob("*")
+            if path.is_file() and path.suffix.casefold() in {".esm", ".esp", ".esl"}
+        ]
+        sync_plugin_lists(instance, profile, installed_plugins)
         _mark_download_installed(instance, archive_path)
         if decision_payload is not None:
             save_fomod_decision(instance, profile, decision_payload)

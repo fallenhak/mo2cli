@@ -23,6 +23,17 @@ MAX_ARCHIVE_BYTES = 64 * 1024**3
 MAX_COMPRESSION_RATIO = 10_000
 
 
+def _solid_member_compressed_size(value: object) -> int | None:
+    """Return a meaningful packed size from a solid-archive listing.
+
+    7z reports a packed size only on the first member of a solid block and
+    reports zero for the remaining members. A zero therefore means "shared or
+    unknown", not that a non-empty member compressed to zero bytes.
+    """
+    size = int(value or 0)
+    return size if size > 0 else None
+
+
 def _validate_expansion(records: list[dict[str, object]], destination: Path) -> None:
     files = [item for item in records if not item.get("directory")]
     if len(files) > MAX_ARCHIVE_FILES:
@@ -267,7 +278,7 @@ def list_archive(path: Path) -> list[dict[str, object]]:
     if not command and py7zr is not None:
         try:
             with py7zr.SevenZipFile(path, mode="r") as archive:
-                return [{"name": str(item.filename), "size": int(getattr(item, "uncompressed", 0) or 0), "compressed": int(getattr(item, "compressed", 0) or 0), "directory": bool(getattr(item, "is_directory", False))} for item in archive.list()]
+                return [{"name": str(item.filename), "size": int(getattr(item, "uncompressed", 0) or 0), "compressed": _solid_member_compressed_size(getattr(item, "compressed", 0)), "directory": bool(getattr(item, "is_directory", False))} for item in archive.list()]
         except Exception as error:
             raise Mo2Error(f"7z listing failed: {error}") from error
     if not command:
@@ -283,7 +294,7 @@ def list_archive(path: Path) -> list[dict[str, object]]:
                 records.append({
                     "name": current["Path"],
                     "size": int(current.get("Size", "0") or 0),
-                    "compressed": int(current.get("Packed Size", "0") or 0),
+                    "compressed": _solid_member_compressed_size(current.get("Packed Size", "0")),
                     "directory": current.get("Folder") == "+",
                     "symbolic_link": current.get("Symbolic Link"),
                     "hard_link": current.get("Hard Link"),

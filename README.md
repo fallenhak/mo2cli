@@ -146,6 +146,8 @@ mo2 --instance "D:\MO2\Skyrim" vfs status
 mo2 --instance "D:\MO2\Skyrim" --profile "Default" vfs run "D:\Tools\xEdit.exe"
 
 # Tool Automation: Pandora & BodySlide
+mo2 --instance "D:\MO2\Skyrim" tools register "Pandora Behaviour Engine+" "D:\MO2\Skyrim\mods\Pandora\Pandora Behaviour Engine+.exe"
+mo2 --instance "D:\MO2\Skyrim" tools register "BodySlide" "D:\MO2\Skyrim\mods\BodySlide\CalienteTools\BodySlide\BodySlide.exe"
 mo2 --instance "D:\MO2\Skyrim" --profile "Default" tools automate pandora
 mo2 --instance "D:\MO2\Skyrim" --profile "Default" tools automate bodyslide --preset "CBBE Curvy" --group "CBBE" --group "CBBE Vanilla Outfits" --trimorphs
 ```
