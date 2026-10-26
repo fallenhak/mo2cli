@@ -100,6 +100,8 @@ def preflight(instance: Instance, profile: str | None = None, settings: str | No
                 problems.append(f"Stock Game SkyrimSE.exe is {verified.get('version')}, expected {expect_version}")
     else:
         result["stock_game"] = {"directory": str(directory), "present": False}
+        if stock_game or expect_version:
+            problems.append(f"Stock Game folder not found: {directory}")
     result["problems"] = problems
     result["ok"] = not problems
     return result

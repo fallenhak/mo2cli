@@ -45,6 +45,9 @@ class WabbajackTests(unittest.TestCase):
         self.assertEqual(len(result["problems"]), 1)
         (self.root / "mods" / "Pandora Output" / "meta.ini").write_text("[General]\nnotes=WABBAJACK_NOMATCH_INCLUDE\n", encoding="utf-8")
         self.assertTrue(wabbajack.preflight(self.instance)["ok"])
+        missing = wabbajack.preflight(self.instance, expect_version="1.6.1170.0")
+        self.assertFalse(missing["ok"])
+        self.assertIn("Stock Game folder not found", missing["problems"][0])
 
     def test_preflight_settings_overwrite_downloads_and_stockgame(self):
         settings = self.root / "x.compiler_settings"
