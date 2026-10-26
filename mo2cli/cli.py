@@ -234,6 +234,24 @@ def build_parser() -> argparse.ArgumentParser:
     diff_ini = ins.add_parser("diff", help="Diff profile INI against game INI")
     diff_ini.add_argument("file")
 
+    settings = sub.add_parser("settings", help="Read and edit the instance's ModOrganizer.ini (not profile INIs)")
+    _common(settings)
+    sts = settings.add_subparsers(dest="settings_command", required=True)
+    settings_list = sts.add_parser("list", help="List sections, or the keys of one section")
+    settings_list.add_argument("section", nargs="?")
+    settings_list.add_argument("--raw", action="store_true", help="Show stored values without QSettings decoding")
+    settings_get = sts.add_parser("get", help="Read one value (use '-' as SECTION for keys before the first header)")
+    settings_get.add_argument("section")
+    settings_get.add_argument("key")
+    settings_get.add_argument("--raw", action="store_true", help="Show the stored value without QSettings decoding")
+    settings_set = sts.add_parser("set", help="Write one value; only that line changes")
+    settings_set.add_argument("section")
+    settings_set.add_argument("key")
+    settings_set.add_argument("value")
+    settings_set.add_argument("--raw", action="store_true", help="Write VALUE literally, with no QSettings escaping")
+    settings_set.add_argument("--bytearray", action="store_true", help="Store as @ByteArray(...) like MO2 does for paths and profile names")
+    settings_set.add_argument("--dry-run", action="store_true")
+
     tools = sub.add_parser("tools", help="Manage and run MO2 custom executables")
     _common(tools)
     tls = tools.add_subparsers(dest="tools_command", required=True)
@@ -787,6 +805,15 @@ def run(args: argparse.Namespace) -> int:
             _output({"written": str(path)}, args.json)
         elif args.inis_command == "diff":
             print(diff_game_ini(instance, args.profile, args.file))
+    elif command == "settings":
+        from . import settings as ini_settings
+
+        if args.settings_command == "list":
+            _output(ini_settings.list_settings(instance, args.section, args.raw), args.json)
+        elif args.settings_command == "get":
+            _output(ini_settings.get_setting(instance, args.section, args.key, args.raw), args.json)
+        else:
+            _output(ini_settings.set_setting(instance, args.section, args.key, args.value, args.raw, args.bytearray, args.dry_run), args.json)
     elif command == "tools":
         if args.tools_command == "list":
             _output(instance.executables(), args.json)
@@ -854,6 +881,8 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
         )
     if command == "inis":
         return args.inis_command == "set"
+    if command == "settings":
+        return args.settings_command == "set" and not args.dry_run
     if command == "files":
         return args.files_command == "materialize"
     if command == "tools":
