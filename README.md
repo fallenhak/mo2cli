@@ -102,6 +102,10 @@ mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" --json mods me
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods separator create "Core" --after "Some Mod"
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods separator group "Core" "SKSE" "Address Library" "Some Mod"
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods separator list
+mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods separator create "Core" --color "#8caae5"
+# Ordered list file (one "Name" or "Name | #RRGGBB" per line, top to bottom as in MO2). Safe to repeat.
+mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods separator apply separators.txt --dry-run
+mo2 --instance "D:\Games\ModOrganizer\Skyrim" --profile "Default" mods separator apply separators.txt
 
 # Nexus/NXM download (API key can be passed via $env:NEXUS_API_KEY)
 mo2 --instance "D:\Games\ModOrganizer\Skyrim" downloads fetch "nxm://skyrimspecialedition/mods/123/files/456?key=...&expires=..." --output mod.zip
@@ -153,6 +157,39 @@ mo2 --instance "D:\MO2\Skyrim" --profile "Default" tools automate bodyslide --pr
 ```
 
 The workflow contract and planned xEdit/SSEEdit, xLODGen, TexGen, and DynDOLOD support are tracked in [TOOL_WORKFLOWS.md](https://github.com/fallenhak/mo2cli/blob/main/TOOL_WORKFLOWS.md).
+
+## Wabbajack-ready setup
+
+These commands build a portable MO2 list that Wabbajack can compile: `downloads\` holds every installed archive with a correct `.meta`, and the game lives in `Stock Game`.
+
+```powershell
+# 1. Portable MO2 from the official 7z (ModOrganizer.ini, portable.txt, profile files, downloads\*.meta written for you)
+mo2 instance init "C:\Modlists\MyList" --portable --mo2-archive "C:\Temp\Mod.Organizer-2.5.2.7z" `
+    --game-name "Skyrim Special Edition" --game-path "C:\Modlists\MyList\Stock Game" `
+    --mo2-url "https://github.com/ModOrganizer2/modorganizer/releases/download/v2.5.2/Mod.Organizer-2.5.2.7z" --dry-run
+
+# 2. Extract any archive safely (zip-slip and link checks, staged, nothing touched on failure)
+mo2 archive extract "C:\Temp\Stock.7z" --to "C:\Modlists\MyList\Stock Game" --strip-root
+
+# 3. Wabbajack sources: directURL for GitHub-style links, the Nexus triple for Nexus files
+mo2 --instance "C:\Modlists\MyList" downloads meta "Tool.zip" --direct-url "https://github.com/o/r/releases/download/v1/Tool.zip"
+mo2 --instance "C:\Modlists\MyList" downloads meta "Mod-1234-1-0.7z" --nexus 1234:5678
+mo2 --instance "C:\Modlists\MyList" downloads meta "Thing.zip" --manual-url "https://example.com/get" --prompt "Press the download button"
+mo2 --instance "C:\Modlists\MyList" --json downloads audit        # installed archives without a Wabbajack source
+
+# 4. MO2 plugins (Root Builder, FOMOD Plus, ...) into <MO2>\plugins; journaled, undoable, manifest in .mo2cli\mo2plugins.json
+mo2 --instance "C:\Modlists\MyList" mo2plugin install "FOMOD Plus.zip" --direct-url "https://..." --dry-run
+mo2 --instance "C:\Modlists\MyList" mo2plugin install "FOMOD Plus.zip" --direct-url "https://..."
+mo2 --instance "C:\Modlists\MyList" mo2plugin list
+mo2 --instance "C:\Modlists\MyList" mo2plugin remove "FOMOD Plus"
+mo2 --instance "C:\Modlists\MyList" undo
+```
+
+Notes:
+
+- `fetch --header "Name: value"` records `directURLHeaders`; signed or expiring CDN URLs are never stored as `directURL`.
+- `downloads sync` also marks archives of FOMOD Plus and of plugins installed with `mo2plugin` as installed.
+- `--non-interactive` (or `MO2CLI_NONINTERACTIVE=1`) stops every prompt; FOMOD reuse `auto` then behaves as without a terminal.
 
 ## Manifest Format
 
