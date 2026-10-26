@@ -449,6 +449,14 @@ def build_parser() -> argparse.ArgumentParser:
     nexus_files.add_argument("--all", action="store_true", help="Include archived, old and deleted files (Nexus GraphQL v2)")
     nexus_files.add_argument("--game-id", type=int, help="Numeric Nexus game id for --all (skyrimspecialedition is 1704)")
 
+    research = sub.add_parser("research", help="Read-only lookups of public modlist data (Nexus Collections, Load Order Library)")
+    _common(research)
+    rs = research.add_subparsers(dest="research_command", required=True)
+    rs_collection = rs.add_parser("collection", help="List the mods of a Nexus Collection revision (GraphQL v2)")
+    rs_collection.add_argument("slug", help="Collection slug, e.g. bsyabf")
+    rs_collection.add_argument("--revision", type=int, help="Revision number (default: latest)")
+    rs_collection.add_argument("--nexus-api-key")
+
     instance = sub.add_parser("instance", help="Initialize a data-only MO2 instance")
     _common(instance)
     ins_instance = instance.add_subparsers(dest="instance_command", required=True)
@@ -696,6 +704,18 @@ def run(args: argparse.Namespace) -> int:
         else:
             entries = list_archive(path)
             _output({"path": str(path), "name": path.name, "stem": archive_stem(path), "size": path.stat().st_size, "files": len(entries)}, args.json)
+        return 0
+    if command == "research":
+        from . import research
+
+        if args.research_command == "collection":
+            result = research.collection(args.slug, args.revision, args.nexus_api_key)
+            if args.json:
+                _output(result, True)
+            else:
+                print(f"{result['name']} ({result['slug']}) revision {result['revision']}: {result['listed']} mods, {result['optional']} optional")
+                for mod in result["mods"]:
+                    print(f"modId={mod['modId']} fileId={mod['fileId']} version={mod['version']} optional={str(mod['optional']).lower()} name={mod['name']}")
         return 0
     if command == "instances":
         _output(list_instances(), args.json)
