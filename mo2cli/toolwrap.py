@@ -366,3 +366,117 @@ def bsarch(
     if capture_to:
         result["capture"] = capture_new_files(instance, profile, capture_to, before)
     return result
+
+
+# --- Synthesis and Pandora ---------------------------------------------------------------------
+
+SYNTHESIS_NAMES = ("synthesis.cli", "synthesis")
+PANDORA_NAMES = ("pandora behaviour engine+", "pandora behaviour engine", "pandora")
+
+
+def _game_data(instance: Instance) -> Path:
+    data = instance.game_path / "Data" if instance.game_path and (instance.game_path / "Data").is_dir() else instance.game_path
+    if data is None:
+        raise Mo2Error("gamePath not found in instance.")
+    return data
+
+
+def _run_generator(
+    instance: Instance,
+    profile: str | None,
+    binary: Path,
+    arguments: list[str],
+    result: dict[str, object],
+    output_mod: str,
+    capture_to: str | None,
+    usvfs_dir: str | None,
+    destination: str | None,
+) -> dict[str, object]:
+    """Create the real output mod folder, run the tool in USVFS and optionally capture stray overwrite files."""
+    ensure_output_mod(instance, profile, output_mod)
+    before = snapshot_overwrite(instance)
+    run = run_vfs(instance, profile, str(binary), arguments, usvfs_dir, destination or str(_game_data(instance)), direct_mods=True)
+    result["returncode"] = run.get("returncode")
+    result["ok"] = run.get("returncode") in (0, None)
+    output_dir = instance.mods_dir / output_mod
+    result["output_files"] = sum(1 for path in output_dir.rglob("*") if path.is_file() and path.name != "meta.ini") if output_dir.is_dir() else 0
+    if capture_to:
+        result["capture"] = capture_new_files(instance, profile, capture_to, before)
+    return result
+
+
+def synthesis_run(
+    instance: Instance,
+    profile: str | None,
+    settings: str,
+    output_mod: str = "Synthesis Output",
+    exe: str | None = None,
+    profile_identifier: str | None = None,
+    data_folder: str | None = None,
+    load_order: str | None = None,
+    extra_data: str | None = None,
+    target_runtime: str | None = None,
+    capture_to: str | None = None,
+    usvfs_dir: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """``Synthesis.CLI run-pipeline`` with -o/-s/-p/-d/-l/-e/-t, run under USVFS.
+
+    The output goes straight to the real folder ``mods/<output_mod>`` (-o), as
+    recommended in Araclar-otomasyon.md; ``capture_to`` additionally collects
+    anything the pipeline wrote to overwrite.
+    """
+    settings_path = Path(settings).expanduser()
+    if not settings_path.is_file():
+        raise Mo2Error(f"Synthesis settings file not found: {settings_path}")
+    binary = find_tool(instance, exe, SYNTHESIS_NAMES)
+    profile_path = instance.profile_path(profile)
+    data = Path(data_folder).expanduser() if data_folder else _game_data(instance)
+    order = Path(load_order).expanduser() if load_order else profile_path / "plugins.txt"
+    output = instance.mods_dir / output_mod
+    arguments = ["run-pipeline", "-o", str(output), "-s", str(settings_path.resolve())]
+    if profile_identifier:
+        arguments += ["-p", profile_identifier]
+    arguments += ["-d", str(data), "-l", str(order)]
+    if extra_data:
+        arguments += ["-e", str(Path(extra_data).expanduser())]
+    if target_runtime:
+        arguments += ["-t", target_runtime]
+    result: dict[str, object] = {"tool": "synthesis", "binary": str(binary), "arguments": arguments, "output_mod": output_mod, "output": str(output), "dry_run": dry_run, "virtualization": "usvfs"}
+    if dry_run:
+        return result
+    return _run_generator(instance, profile, binary, arguments, result, output_mod, capture_to, usvfs_dir, str(data))
+
+
+def pandora_run(
+    instance: Instance,
+    profile: str | None,
+    output_mod: str = "Pandora Output",
+    exe: str | None = None,
+    tesv: str | None = None,
+    auto_run: bool = True,
+    auto_close: bool = True,
+    capture_to: str | None = None,
+    usvfs_dir: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Pandora Behaviour Engine+ with ``--tesv`` (game root, not Data), ``-o``, ``--auto_run``, ``--auto_close``."""
+    binary = find_tool(instance, exe, PANDORA_NAMES)
+    root = Path(tesv).expanduser() if tesv else instance.game_path
+    if root is None:
+        raise Mo2Error("gamePath not found in instance; pass --tesv.")
+    output = instance.mods_dir / output_mod
+    arguments = ["--tesv", str(root), "-o", str(output)]
+    if auto_run:
+        arguments.append("--auto_run")
+    if auto_close:
+        arguments.append("--auto_close")
+    result: dict[str, object] = {"tool": "pandora", "binary": str(binary), "arguments": arguments, "output_mod": output_mod, "output": str(output), "dry_run": dry_run, "virtualization": "usvfs"}
+    if auto_run:
+        cache = binary.parent / "Pandora_Engine" / "ActiveMods.json"
+        result["active_mods_cache"] = str(cache) if cache.is_file() else None
+        if not cache.is_file():
+            result["warning"] = "Pandora_Engine/ActiveMods.json not found: --auto_run needs one successful GUI run first."
+    if dry_run:
+        return result
+    return _run_generator(instance, profile, binary, arguments, result, output_mod, capture_to, usvfs_dir, None)

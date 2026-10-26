@@ -320,6 +320,27 @@ def build_parser() -> argparse.ArgumentParser:
     bsarch_command.add_argument("--filter", action="append", metavar="MASK", help="File mask such as *.nif (repeatable)")
     bsarch_command.add_argument("--capture-to", metavar="MOD", help="Move files that appeared in overwrite into this mod")
     bsarch_command.add_argument("--dry-run", action="store_true")
+    synth = tls.add_parser("synthesis-run", help="Run 'Synthesis.CLI run-pipeline' inside USVFS; output goes to mods/<output mod>")
+    synth.add_argument("--settings", required=True, help="PipelineSettings.json (-s)")
+    synth.add_argument("--output-mod", default="Synthesis Output", help="Mod folder used as -o (default: Synthesis Output)")
+    synth.add_argument("--exe", help="Synthesis.CLI.exe (default: a registered Synthesis.CLI tool)")
+    synth.add_argument("--profile-id", help="Synthesis profile identifier (-p)")
+    synth.add_argument("--data-folder", help="-d (default: game Data folder)")
+    synth.add_argument("--load-order", help="-l (default: the profile's plugins.txt)")
+    synth.add_argument("--extra-data", help="-e ExtraDataFolder")
+    synth.add_argument("--target-runtime", help="-t, e.g. net8.0")
+    synth.add_argument("--capture-to", metavar="MOD", help="Move files that appeared in overwrite into this mod (created if missing)")
+    synth.add_argument("--usvfs-dir")
+    synth.add_argument("--dry-run", action="store_true")
+    pandora_run = tls.add_parser("pandora-run", help="Run Pandora Behaviour Engine+ headless (--tesv/-o/--auto_run/--auto_close) inside USVFS")
+    pandora_run.add_argument("--output-mod", default="Pandora Output")
+    pandora_run.add_argument("--exe", help="Pandora executable (default: a registered Pandora tool)")
+    pandora_run.add_argument("--tesv", help="Game root folder (default: instance gamePath)")
+    pandora_run.add_argument("--no-auto-run", action="store_true")
+    pandora_run.add_argument("--no-auto-close", action="store_true")
+    pandora_run.add_argument("--capture-to", metavar="MOD", help="Move files that appeared in overwrite into this mod (created if missing)")
+    pandora_run.add_argument("--usvfs-dir")
+    pandora_run.add_argument("--dry-run", action="store_true")
     automate = tls.add_parser("automate", help="Run Pandora or BodySlide workflows with USVFS")
     automations = automate.add_subparsers(dest="automation", required=True)
     pandora = automations.add_parser("pandora", help="Run Pandora with saved patch selections")
@@ -903,6 +924,18 @@ def run(args: argparse.Namespace) -> int:
             result = toolwrap.xedit_clean(instance, args.profile, args.plugin, args.exe, args.log_dir, args.capture_to, args.usvfs_dir, args.moprofile, args.force, args.dry_run)
             _output(result, args.json)
             return 0 if args.dry_run or result.get("ok") else 1
+        elif args.tools_command == "synthesis-run":
+            from . import toolwrap
+
+            result = toolwrap.synthesis_run(instance, args.profile, args.settings, args.output_mod, args.exe, args.profile_id, args.data_folder, args.load_order, args.extra_data, args.target_runtime, args.capture_to, args.usvfs_dir, args.dry_run)
+            _output(result, args.json)
+            return 0 if args.dry_run or result.get("ok") else 1
+        elif args.tools_command == "pandora-run":
+            from . import toolwrap
+
+            result = toolwrap.pandora_run(instance, args.profile, args.output_mod, args.exe, args.tesv, not args.no_auto_run, not args.no_auto_close, args.capture_to, args.usvfs_dir, args.dry_run)
+            _output(result, args.json)
+            return 0 if args.dry_run or result.get("ok") else 1
         elif args.tools_command == "loot-sort":
             from . import toolwrap
 
@@ -982,7 +1015,7 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
             return args.apply and not args.dry_run
         if args.tools_command == "bsarch":
             return bool(args.capture_to) and not args.dry_run
-        return args.tools_command in {"register", "remove"} or (args.tools_command in {"automate", "xedit-clean"} and not args.dry_run)
+        return args.tools_command in {"register", "remove"} or (args.tools_command in {"automate", "xedit-clean", "synthesis-run", "pandora-run"} and not args.dry_run)
     if command == "downloads":
         if args.downloads_command == "meta":
             return not args.dry_run

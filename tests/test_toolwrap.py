@@ -160,12 +160,60 @@ class ToolWrapTests(unittest.TestCase):
             with self.assertRaises(Mo2Error):
                 toolwrap.bsarch(self.instance, None, "pack", "src", str(self.root / "exists.bsa"), exe=str(self.exe))
 
+    def test_synthesis_run_builds_flags_and_captures(self):
+        settings = self.root / "PipelineSettings.json"
+        settings.write_text("{}", encoding="utf-8")
+
+        def fake_vfs(instance, profile, binary, args, usvfs_dir, destination, direct_mods=False, **kwargs):
+            self.vfs_args = (args, destination, direct_mods)
+            (instance.mods_dir / "Synthesis Output" / "Synthesis.esp").write_bytes(b"s")
+            instance.overwrite_dir.mkdir(exist_ok=True)
+            (instance.overwrite_dir / "stray.txt").write_bytes(b"x")
+            return {"returncode": 0}
+
+        with patch("mo2cli.toolwrap.run_vfs", side_effect=fake_vfs):
+            result = toolwrap.synthesis_run(self.instance, None, str(settings), exe=str(self.exe), profile_identifier="Main", target_runtime="net8.0", capture_to="Synth Extras")
+        args, destination, direct = self.vfs_args
+        self.assertEqual(args[0], "run-pipeline")
+        self.assertEqual(args[args.index("-o") + 1], str(self.root / "mods" / "Synthesis Output"))
+        self.assertEqual(args[args.index("-s") + 1], str(settings.resolve()))
+        self.assertEqual(args[args.index("-p") + 1], "Main")
+        self.assertTrue(args[args.index("-l") + 1].endswith("plugins.txt"))
+        self.assertTrue(args[args.index("-d") + 1].endswith("Data"))
+        self.assertEqual(args[args.index("-t") + 1], "net8.0")
+        self.assertNotIn("-e", args)
+        self.assertTrue(direct)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["output_files"], 1)
+        self.assertEqual(result["capture"]["moved"], ["stray.txt"])
+        self.assertIn("Synthesis Output", (self.root / "profiles" / "Default" / "modlist.txt").read_text(encoding="utf-8"))
+        with self.assertRaises(Mo2Error):
+            toolwrap.synthesis_run(self.instance, None, str(self.root / "missing.json"), exe=str(self.exe))
+        with patch("mo2cli.toolwrap.run_vfs", side_effect=AssertionError("must not run")):
+            plan = toolwrap.synthesis_run(self.instance, None, str(settings), exe=str(self.exe), extra_data="X", dry_run=True)
+        self.assertIn("-e", plan["arguments"])
+
+    def test_pandora_run_flags(self):
+        def fake_vfs(instance, profile, binary, args, usvfs_dir, destination, direct_mods=False, **kwargs):
+            self.vfs_args = (args, destination)
+            return {"returncode": 3}
+
+        with patch("mo2cli.toolwrap.run_vfs", side_effect=fake_vfs):
+            result = toolwrap.pandora_run(self.instance, None, exe=str(self.exe))
+        args, destination = self.vfs_args
+        self.assertEqual(args, ["--tesv", str(self.game), "-o", str(self.root / "mods" / "Pandora Output"), "--auto_run", "--auto_close"])
+        self.assertFalse(result["ok"])
+        self.assertIn("warning", result)
+        plan = toolwrap.pandora_run(self.instance, None, exe=str(self.exe), auto_run=False, auto_close=False, dry_run=True)
+        self.assertEqual(plan["arguments"], ["--tesv", str(self.game), "-o", str(self.root / "mods" / "Pandora Output")])
+
     def test_cli_dry_runs_need_no_lock(self):
         with patch("mo2cli.safety._running_process_names", return_value={"modorganizer.exe"}):
             for argv in (
                 ["tools", "xedit-clean", "A.esp", "--exe", str(self.exe), "--dry-run"],
                 ["tools", "loot-sort", "--exe", str(self.exe), "--apply", "--dry-run"],
                 ["tools", "bsarch", "list", "x.bsa", "--exe", str(self.exe), "--dry-run"],
+                ["tools", "pandora-run", "--exe", str(self.exe), "--dry-run"],
             ):
                 out = StringIO()
                 with redirect_stdout(out):
