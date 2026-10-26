@@ -252,6 +252,19 @@ def build_parser() -> argparse.ArgumentParser:
     settings_set.add_argument("--bytearray", action="store_true", help="Store as @ByteArray(...) like MO2 does for paths and profile names")
     settings_set.add_argument("--dry-run", action="store_true")
 
+    stockgame = sub.add_parser("stockgame", help="Create and verify a Wabbajack style Stock Game folder")
+    _common(stockgame)
+    sgs = stockgame.add_subparsers(dest="stockgame_command", required=True)
+    sg_create = sgs.add_parser("create", help="Copy vanilla game files from a Steam folder (read only) into <instance>\Stock Game")
+    sg_create.add_argument("--from", dest="source", required=True, help="Game folder containing SkyrimSE.exe; never modified")
+    sg_create.add_argument("--to", help="Destination (default: <instance>\Stock Game)")
+    sg_create.add_argument("--expect-version", help="Required SkyrimSE.exe file version, e.g. 1.6.1170.0")
+    sg_create.add_argument("--allow-mismatch", action="store_true", help="Copy even when the version differs from --expect-version")
+    sg_create.add_argument("--dry-run", action="store_true")
+    sg_verify = sgs.add_parser("verify", help="Print SkyrimSE.exe version, size and hashes (xxHash64 and SHA-256)")
+    sg_verify.add_argument("--dir", help="Game folder (default: <instance>\Stock Game)")
+    sg_verify.add_argument("--expect-version")
+
     tools = sub.add_parser("tools", help="Manage and run MO2 custom executables")
     _common(tools)
     tls = tools.add_subparsers(dest="tools_command", required=True)
@@ -805,6 +818,15 @@ def run(args: argparse.Namespace) -> int:
             _output({"written": str(path)}, args.json)
         elif args.inis_command == "diff":
             print(diff_game_ini(instance, args.profile, args.file))
+    elif command == "stockgame":
+        from . import stockgame
+
+        if args.stockgame_command == "create":
+            _output(stockgame.create(instance, args.source, args.to, args.expect_version, args.allow_mismatch, args.dry_run), args.json)
+        else:
+            result = stockgame.verify(Path(args.dir) if args.dir else instance.base / "Stock Game", args.expect_version)
+            _output(result, args.json)
+            return 0 if result["ok"] else 1
     elif command == "settings":
         from . import settings as ini_settings
 
@@ -883,6 +905,8 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
         return args.inis_command == "set"
     if command == "settings":
         return args.settings_command == "set" and not args.dry_run
+    if command == "stockgame":
+        return args.stockgame_command == "create" and not args.dry_run
     if command == "files":
         return args.files_command == "materialize"
     if command == "tools":

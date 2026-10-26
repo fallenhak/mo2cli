@@ -166,7 +166,7 @@ def _undo_mo2plugin(instance: Instance, details: dict[str, Any]) -> None:
 def undo_last(instance: Instance) -> dict[str, Any]:
     entries = _read(instance)
     undone = {str(entry.get("target")) for entry in entries if entry.get("operation") == "undo"}
-    target = next((entry for entry in reversed(entries) if entry.get("operation") in {"install", "remove", "rename", "separator_create", "separator_remove", "separator_group", "profile_delete", "mo2plugin_install", "mo2plugin_remove", "settings_set"} and entry.get("reversible") and str(entry.get("id")) not in undone), None)
+    target = next((entry for entry in reversed(entries) if entry.get("operation") in {"install", "remove", "rename", "separator_create", "separator_remove", "separator_group", "profile_delete", "mo2plugin_install", "mo2plugin_remove", "settings_set", "stockgame_create"} and entry.get("reversible") and str(entry.get("id")) not in undone), None)
     if target is None:
         raise Mo2Error("No reversible operation found.")
 
@@ -255,6 +255,15 @@ def undo_last(instance: Instance) -> dict[str, Any]:
         if isinstance(previous_selected, str):
             instance.selected_profile = previous_selected
 
+    elif operation == "stockgame_create":
+        destination = Path(str(target["destination"]))
+        trash_root = instance.base / ".mo2cli-trash"
+        if not _path_inside(destination, instance.base):
+            raise Mo2Error("Stock Game undo target is outside the instance; operation aborted.")
+        if destination.exists():
+            recovery = trash_root / f"undo-stockgame-{dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
+            recovery.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(destination), str(recovery))
     elif operation == "settings_set":
         _restore_state_files(instance, target)
     elif operation in {"mo2plugin_install", "mo2plugin_remove"}:
