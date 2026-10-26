@@ -9,7 +9,7 @@ from . import qsettings
 from .archives import archive_common_root, extract_to_directory, list_archive
 from .downloads import write_meta
 from .formats import write_text
-from .workspace import Mo2Error, _safe_name
+from .workspace import Mo2Error, _safe_name, _windows_file_version
 
 # Header MO2 writes at the top of modlist.txt / plugins.txt / loadorder.txt
 # (profile.cpp doWriteModlist, pluginlist.cpp).
@@ -196,6 +196,12 @@ def initialize_portable(
         "\r\n".join(["[General]", "LocalSaves=true", "LocalSettings=true", "AutomaticArchiveInvalidation=false", ""]),
     )
     result["profile_inis"] = _seed_profile_inis(profile_dir, game, edition, Path(my_games) if my_games else None) if is_skyrim_se else []
+    if version is None:
+        # Not in the archive name: read it from the executable's file version.
+        exe_version = _windows_file_version(root / "ModOrganizer.exe")
+        if exe_version:
+            version = exe_version[:-2] if exe_version.endswith(".0") else exe_version
+        result["mo2_version"] = version
     write_text(root / "ModOrganizer.ini", render_mo2_ini(game_name, game, edition, profile, version))
 
     downloads = root / "downloads"

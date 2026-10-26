@@ -5,6 +5,7 @@ import unittest
 import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import py7zr
 
@@ -180,6 +181,13 @@ class PortableInstanceTests(unittest.TestCase):
         values = IniDocument.read(Path(result["meta"])).as_dict("General")
         self.assertNotIn("directURL", values)
         self.assertIn("downloads meta", result["note"])
+
+    def test_version_falls_back_to_executable_file_version(self):
+        self.archive = make_mo2_zip(self.root / "mo2.zip")
+        with patch("mo2cli.instance._windows_file_version", return_value="2.5.2.0"):
+            result = self.init()
+        self.assertEqual(result["mo2_version"], "2.5.2")
+        self.assertIn("version=2.5.2", (self.target / "ModOrganizer.ini").read_text())
 
     def test_dry_run_writes_nothing(self):
         self.game.mkdir(parents=True)
