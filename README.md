@@ -191,6 +191,50 @@ Notes:
 - `downloads sync` also marks archives of FOMOD Plus and of plugins installed with `mo2plugin` as installed.
 - `--non-interactive` (or `MO2CLI_NONINTERACTIVE=1`) stops every prompt; FOMOD reuse `auto` then behaves as without a terminal.
 
+## Modlist tooling
+
+Commands for building and checking a list without a GUI. Every command that changes something supports `--dry-run`, is journaled where it can be (`undo`), and takes `--json`.
+
+```powershell
+# ModOrganizer.ini (not the profile INIs): values go through the QSettings codec, other bytes stay as they were
+mo2 --instance "C:\Modlists\MyList" settings list
+mo2 --instance "C:\Modlists\MyList" settings list General
+mo2 --instance "C:\Modlists\MyList" settings get General gamePath
+mo2 --instance "C:\Modlists\MyList" settings set General selected_profile Default --dry-run
+mo2 --instance "C:\Modlists\MyList" settings set Settings base_directory "%BASE_DIR%" --raw      # write the literal text
+mo2 --instance "C:\Modlists\MyList" settings set General gamePath "C:\Modlists\MyList\Stock Game" --bytearray
+
+# Stock Game: copies only vanilla files (exe, DLLs, official .esm/.bsa, Creation Club, Data\Video) and only reads --from
+mo2 --instance "C:\Modlists\MyList" stockgame create --from "D:\Steam\steamapps\common\Skyrim Special Edition" --expect-version 1.6.1170.0 --dry-run
+mo2 --instance "C:\Modlists\MyList" stockgame create --from "D:\Downgraded\Skyrim" --expect-version 1.6.1170.0
+mo2 --instance "C:\Modlists\MyList" --json stockgame verify --expect-version 1.6.1170.0           # version, size, xxHash64 (Wabbajack base64) and SHA-256
+
+# Nexus: --all also lists archived/old files (GraphQL v2); the default listing shows category=
+mo2 --instance "C:\Modlists\MyList" nexus files 12604 --all
+
+# GitHub releases wherever a URL is accepted (downloads fetch, mods install, manifest "url"); .meta gets the asset's browser_download_url as directURL
+mo2 --instance "C:\Modlists\MyList" downloads fetch github:owner/repo@latest --asset "*.7z"
+mo2 --instance "C:\Modlists\MyList" mods install github:owner/repo@v1.2 --asset "Tool-*.zip" --name "Tool"
+
+# Conflicts between enabled mods in modlist priority order (overwrite wins first)
+mo2 --instance "C:\Modlists\MyList" --json conflicts report --ext .esp,.pex,.dds
+mo2 --instance "C:\Modlists\MyList" --json conflicts report --mod "Some Mod" --include-bsa   # also reads BSA v104/v105 file lists of enabled plugins
+mo2 --instance "C:\Modlists\MyList" --json conflicts redundant                                  # empty mods and mods fully overwritten by others
+
+# Tool wrappers (executables come from registered tools or --exe)
+mo2 --instance "C:\Modlists\MyList" tools xedit-clean "Some Patch.esp" --capture-to "Cleaned Plugins" --dry-run
+mo2 --instance "C:\Modlists\MyList" tools loot-sort                  # report only; loadorder.txt untouched
+mo2 --instance "C:\Modlists\MyList" tools loot-sort --apply          # writes loadorder.txt and plugins.txt, undoable
+mo2 --instance "C:\Modlists\MyList" tools bsarch pack "C:\Temp\src" "C:\Modlists\MyList\mods\X\X.bsa" --filter "*.nif"
+mo2 --instance "C:\Modlists\MyList" tools bsarch list "X.bsa" --exe "C:\Tools\BSArch.exe"
+```
+
+Notes:
+
+- `stockgame create` never writes to `--from`; skipped files are listed in the result. `--to` defaults to `<instance>\Stock Game`; undo moves a freshly created folder to `.mo2cli-trash`.
+- `--capture-to MOD` moves files that appeared (or changed) in `overwrite` during the run into that mod (created and enabled when missing); `undo` moves them back.
+- `xedit-clean` runs SSEEdit inside USVFS with `-SSE -qac -autoexit -autoload -IKnowWhatImDoing -D -P -I -R`, backs the plugin up to `.mo2cli-trash` first and refuses vanilla and Creation Club plugins without `--force`. `loot-sort` always passes a separate `--pluginListOutputPath`.
+
 ## Manifest Format
 
 Manifest files can be written in JSON or TOML format. For Nexus mods, exact mod URL/NXM or `game` + `mod_id` can be specified. If no file ID is specified, the main file is selected.

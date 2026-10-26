@@ -8,6 +8,7 @@ mo2cli treats an external modding tool as a reproducible workflow, not merely an
 - Generic USVFS execution
 - Pandora Behaviour Engine+ workflow with a dedicated output mod
 - BodySlide batch workflow with a dedicated output mod
+- `tools xedit-clean PLUGIN` (SSEEdit `-qac` in USVFS, log parsed for ITM/UDR counts), `tools loot-sort [--apply]` (lootcli to a temporary `--pluginListOutputPath`, JSON summary of messages, dirty plugins and missing masters) and `tools bsarch pack|unpack|list`; `--capture-to MOD` moves new files from `overwrite` into a mod (journaled, undoable)
 - Tool archives for Wabbajack lists: `archive extract`, `downloads meta` / `downloads audit`, and `mo2plugin install` keep the archive in `downloads\` with a `.meta` that carries a Wabbajack source (see the README section "Wabbajack-ready setup")
 
 ## Planned workflows
