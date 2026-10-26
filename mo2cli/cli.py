@@ -255,17 +255,26 @@ def build_parser() -> argparse.ArgumentParser:
     settings_set.add_argument("--bytearray", action="store_true", help="Store as @ByteArray(...) like MO2 does for paths and profile names")
     settings_set.add_argument("--dry-run", action="store_true")
 
+    conflicts = sub.add_parser("conflicts", help="File level conflict reports across enabled mods")
+    _common(conflicts)
+    cfs = conflicts.add_subparsers(dest="conflicts_command", required=True)
+    conflicts_report = cfs.add_parser("report", help="Per path winner and losers plus per mod overwrite counts")
+    conflicts_report.add_argument("--mod", help="Only conflicts that involve this mod")
+    conflicts_report.add_argument("--ext", help="Comma separated extensions, e.g. .esp,.pex,.dds")
+    conflicts_report.add_argument("--include-bsa", action="store_true", help="Also read file lists of BSAs attached to enabled plugins")
+    cfs.add_parser("redundant", help="Enabled mods that are empty or fully overwritten by higher priority mods")
+
     stockgame = sub.add_parser("stockgame", help="Create and verify a Wabbajack style Stock Game folder")
     _common(stockgame)
     sgs = stockgame.add_subparsers(dest="stockgame_command", required=True)
-    sg_create = sgs.add_parser("create", help="Copy vanilla game files from a Steam folder (read only) into <instance>\Stock Game")
+    sg_create = sgs.add_parser("create", help="Copy vanilla game files from a Steam folder (read only) into <instance>/Stock Game")
     sg_create.add_argument("--from", dest="source", required=True, help="Game folder containing SkyrimSE.exe; never modified")
-    sg_create.add_argument("--to", help="Destination (default: <instance>\Stock Game)")
+    sg_create.add_argument("--to", help="Destination (default: <instance>/Stock Game)")
     sg_create.add_argument("--expect-version", help="Required SkyrimSE.exe file version, e.g. 1.6.1170.0")
     sg_create.add_argument("--allow-mismatch", action="store_true", help="Copy even when the version differs from --expect-version")
     sg_create.add_argument("--dry-run", action="store_true")
     sg_verify = sgs.add_parser("verify", help="Print SkyrimSE.exe version, size and hashes (xxHash64 and SHA-256)")
-    sg_verify.add_argument("--dir", help="Game folder (default: <instance>\Stock Game)")
+    sg_verify.add_argument("--dir", help="Game folder (default: <instance>/Stock Game)")
     sg_verify.add_argument("--expect-version")
 
     tools = sub.add_parser("tools", help="Manage and run MO2 custom executables")
@@ -827,6 +836,13 @@ def run(args: argparse.Namespace) -> int:
             _output({"written": str(path)}, args.json)
         elif args.inis_command == "diff":
             print(diff_game_ini(instance, args.profile, args.file))
+    elif command == "conflicts":
+        from . import conflicts as conflict_reports
+
+        if args.conflicts_command == "report":
+            _output(conflict_reports.report(instance, args.profile, args.mod, args.ext, args.include_bsa), args.json)
+        else:
+            _output(conflict_reports.redundant(instance, args.profile), args.json)
     elif command == "stockgame":
         from . import stockgame
 
