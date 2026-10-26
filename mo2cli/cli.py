@@ -277,6 +277,21 @@ def build_parser() -> argparse.ArgumentParser:
     sg_verify.add_argument("--dir", help="Game folder (default: <instance>/Stock Game)")
     sg_verify.add_argument("--expect-version")
 
+    wabbajack = sub.add_parser("wabbajack", help="Pre-flight check and compile with wabbajack-cli")
+    _common(wabbajack)
+    wjs = wabbajack.add_subparsers(dest="wabbajack_command", required=True)
+    wj_check = wjs.add_parser("check", help="Report what would break a compile: downloads without .meta, non-empty overwrite, untagged generated mods, Stock Game version")
+    wj_check.add_argument("--settings", help=".compiler_settings file (its NoMatchInclude list counts as covering a mod)")
+    wj_check.add_argument("--expect-version", help="Expected SkyrimSE.exe file version, e.g. 1.6.1170.0")
+    wj_check.add_argument("--stock-game", help="Stock Game folder (default: <instance>/Stock Game)")
+    wj_compile = wjs.add_parser("compile", help="Run 'wabbajack-cli compile -i ... -o ...' after the pre-flight check")
+    wj_compile.add_argument("--output", required=True, help="Target .wabbajack file (or a folder)")
+    wj_compile.add_argument("--settings", help=".compiler_settings file (default: infer from the instance root)")
+    wj_compile.add_argument("--exe", help="wabbajack-cli.exe (default: a registered tool)")
+    wj_compile.add_argument("--expect-version", help="Expected SkyrimSE.exe file version")
+    wj_compile.add_argument("--force", action="store_true", help="Compile even when the pre-flight check reports problems")
+    wj_compile.add_argument("--dry-run", action="store_true", help="Print the command and the pre-flight report only")
+
     tools = sub.add_parser("tools", help="Manage and run MO2 custom executables")
     _common(tools)
     tls = tools.add_subparsers(dest="tools_command", required=True)
@@ -900,6 +915,16 @@ def run(args: argparse.Namespace) -> int:
             result = stockgame.verify(Path(args.dir) if args.dir else instance.base / "Stock Game", args.expect_version)
             _output(result, args.json)
             return 0 if result["ok"] else 1
+    elif command == "wabbajack":
+        from . import wabbajack
+
+        if args.wabbajack_command == "check":
+            result = wabbajack.preflight(instance, args.profile, args.settings, args.expect_version, args.stock_game)
+            _output(result, args.json)
+            return 0 if result["ok"] else 1
+        result = wabbajack.compile_modlist(instance, args.profile, args.output, args.settings, args.exe, args.expect_version, args.force, args.dry_run)
+        _output(result, args.json)
+        return 0 if args.dry_run or result.get("ok") else 1
     elif command == "settings":
         from . import settings as ini_settings
 
