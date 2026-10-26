@@ -712,8 +712,8 @@ class FeatureTests(unittest.TestCase):
 
     def test_split_arguments_removes_quotes_and_keeps_windows_paths(self):
         self.assertEqual(
-            split_arguments('--tesv "C:/Game Root" --output "C:\Pandora Output" x'),
-            ["--tesv", "C:/Game Root", "--output", "C:\Pandora Output", "x"],
+            split_arguments('--tesv "C:/Game Root" --output "C:\\Pandora Output" x'),
+            ["--tesv", "C:/Game Root", "--output", "C:\\Pandora Output", "x"],
         )
         self.assertEqual(split_arguments('a \\"b\\" ""'), ["a", '"b"', ""])
         self.assertEqual(split_arguments("   "), [])
