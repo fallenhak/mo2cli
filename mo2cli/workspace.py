@@ -11,6 +11,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import qsettings
 from .formats import ModList, PluginList, read_text_exact, write_text
 from .metadata import IniDocument, ModMetadata
 
@@ -67,10 +68,7 @@ def _windows_file_version(path: Path) -> str | None:
 
 
 def _qt_value(value: str) -> str:
-    value = value.strip()
-    if value.startswith("@ByteArray(") and value.endswith(")"):
-        return value[len("@ByteArray(") : -1]
-    return value
+    return qsettings.decode(value)
 
 
 def _resolve(value: str, base: Path, root: Path) -> Path:
@@ -200,14 +198,31 @@ class Instance:
     def profile_settings(self, requested: str | None = None) -> dict[str, object]:
         path = self.profile_path(requested)
         document = IniDocument.read(path / "settings.ini")
-        return {"LocalSettings": bool(document.get("LocalSettings", False)), "LocalSaves": bool(document.get("LocalSaves", False))}
+        return {key: bool(self._profile_ini_value(document, key)) for key in ("LocalSettings", "LocalSaves")}
+
+    @staticmethod
+    def _profile_ini_section(document: IniDocument, key: str) -> str | None:
+        """Where a profile ``settings.ini`` key lives.
+
+        MO2 itself writes ``[General]`` (QSettings group); older mo2cli files
+        hold the keys before any section header.
+        """
+        if document.get(key) is not None:
+            return None
+        if document.get(key, section="General") is not None:
+            return "General"
+        return "General" if any(line.strip().casefold() == "[general]" for line in document.lines) else None
+
+    @classmethod
+    def _profile_ini_value(cls, document: IniDocument, key: str):
+        return document.get(key, False, section=cls._profile_ini_section(document, key))
 
     def set_profile_settings(self, requested: str | None = None, local_inis: bool | None = None, local_saves: bool | None = None) -> dict[str, object]:
         path = self.profile_path(requested)
         document = IniDocument.read(path / "settings.ini")
         current = self.profile_settings(requested)
         if local_inis is not None:
-            document.set("LocalSettings", local_inis)
+            document.set("LocalSettings", local_inis, section=self._profile_ini_section(document, "LocalSettings"))
             current["LocalSettings"] = local_inis
         if local_saves is not None:
             saves = path / "saves"
@@ -216,7 +231,7 @@ class Instance:
                 hidden.rename(saves)
             elif not local_saves and saves.exists() and not hidden.exists():
                 saves.rename(hidden)
-            document.set("LocalSaves", local_saves)
+            document.set("LocalSaves", local_saves, section=self._profile_ini_section(document, "LocalSaves"))
             current["LocalSaves"] = local_saves
         document.write(path / "settings.ini")
         return current

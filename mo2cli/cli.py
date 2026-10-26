@@ -18,7 +18,7 @@ from .formats import ModList, PluginList, write_text
 from .game import run_game
 from .inis import diff_game_ini, get_value, list_inis, set_value
 from .installer import install_archive, remove_mod, rename_mod
-from .instance import initialize
+from .instance import initialize, initialize_portable
 from .instances import list_instances
 from .journal import history as journal_history
 from .journal import undo_last
@@ -327,6 +327,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_instance.add_argument("--game-path", required=True)
     init_instance.add_argument("--profile", default="Default")
     init_instance.add_argument("--force", action="store_true")
+    init_instance.add_argument("--portable", action="store_true", help="Build a real portable MO2 from --mo2-archive (portable.txt, ModOrganizer.ini, downloads, profile)")
+    init_instance.add_argument("--mo2-archive", help="Official Mod.Organizer-X.Y.Z.7z (used with --portable; also copied into downloads)")
+    init_instance.add_argument("--mo2-url", help="With --portable: Wabbajack directURL for the MO2 archive's .meta (GitHub release asset)")
+    init_instance.add_argument("--my-games", help="With --portable: Documents/My Games/<game> folder to take skyrimprefs.ini/skyrimcustom.ini from")
+    init_instance.add_argument("--dry-run", action="store_true", help="With --portable: report the plan without writing")
 
     game = sub.add_parser("game", help="Launch game directly")
     _common(game)
@@ -503,7 +508,14 @@ def run(args: argparse.Namespace) -> int:
     command = args.command
     if command == "instance":
         if args.instance_command == "init":
-            _output(initialize(args.path, args.game_name, args.game_path, args.profile, args.force), args.json)
+            if args.portable:
+                if not args.mo2_archive:
+                    raise Mo2Error("--portable requires --mo2-archive.")
+                _output(initialize_portable(args.path, args.mo2_archive, args.game_name, args.game_path, args.profile, args.force, args.dry_run, args.mo2_url, args.my_games), args.json)
+            elif args.mo2_archive or args.mo2_url or args.my_games or args.dry_run:
+                raise Mo2Error("--mo2-archive, --mo2-url, --my-games and --dry-run only apply with --portable.")
+            else:
+                _output(initialize(args.path, args.game_name, args.game_path, args.profile, args.force), args.json)
         return 0
     if command == "game":
         if args.game_command == "run":
