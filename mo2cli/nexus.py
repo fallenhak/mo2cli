@@ -11,8 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .downloads import fetch
-from .formats import write_text
+from .downloads import fetch, mo2_game_name, write_meta
 from .workspace import Instance, Mo2Error
 
 API_ROOT = "https://api.nexusmods.com/v1"
@@ -258,23 +257,24 @@ def download_reference(
     if not archive_name:
         archive_name = f"nexus-{parsed.mod_id}-{file_id}.zip"
 
-    result = fetch(instance, link, output or str(archive_name), replace, headers={"User-Agent": f"{APPLICATION_NAME}/{client.application_version}"}, expected_sha256=expected_sha256)
+    result = fetch(instance, link, output or str(archive_name), replace, headers={"User-Agent": f"{APPLICATION_NAME}/{client.application_version}"}, expected_sha256=expected_sha256, record_source=False)
     archive_path = Path(str(result["path"]))
     stable_url = f"https://www.nexusmods.com/{parsed.game}/mods/{parsed.mod_id}?tab=files&file_id={file_id}"
-    sidecar = archive_path.with_name(archive_path.name + ".meta")
-    sidecar_lines = [
-        "[General]",
-        f"gameName={parsed.game}",
-        f"modID={parsed.mod_id}",
-        f"fileID={file_id}",
-        f"name={archive_name}",
-        f"modName={file_info.get('mod_name') or file_info.get('modName') or archive_name}",
-        f"version={file_info.get('version') or ''}",
-        "repository=Nexus",
-        f"url={stable_url}",
-        "installed=false",
-        "uninstalled=false",
-    ]
-    write_text(sidecar, "\r\n".join(sidecar_lines) + "\r\n")
+    # The CDN link is short-lived and signed, so the durable Wabbajack source
+    # is the Nexus triple (SkyrimSE / modID / fileID), never ``directURL``.
+    write_meta(
+        archive_path.with_name(archive_path.name + ".meta"),
+        game_name=mo2_game_name(parsed.game),
+        mod_id=parsed.mod_id,
+        file_id=file_id,
+        name=str(archive_name),
+        mod_name=str(file_info.get("mod_name") or file_info.get("modName") or archive_name),
+        version=str(file_info.get("version") or ""),
+        repository="Nexus",
+        url=stable_url,
+        installed=False,
+        uninstalled=False,  # like MO2: a fresh download is neither installed nor user-uninstalled
+        defaults={"removed": False},
+    )
     result.update({"source": "nexus", "game": parsed.game, "mod_id": parsed.mod_id, "file_id": file_id, "file_name": archive_name, "version": file_info.get("version")})
     return result

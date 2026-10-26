@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import __version__
 from .archives import archive_stem, extract_to_directory, list_archive, sha256
+from .downloads import audit_downloads, set_meta
 from .downloads import fetch as fetch_download
 from .downloads import list_downloads
 from .fomod import inspect_archive as inspect_fomod
@@ -272,6 +273,20 @@ def build_parser() -> argparse.ArgumentParser:
     download_mark = dls.add_parser("mark-installed", help="Mark download archive(s) as installed or uninstalled")
     download_mark.add_argument("archive", nargs="+", help="Archive filename(s)")
     download_mark.add_argument("--uninstalled", action="store_true", help="Mark as uninstalled instead")
+    download_audit = dls.add_parser("audit", help="List archives Wabbajack could not re-download and mods whose archive is missing")
+    download_meta = dls.add_parser("meta", help="Create or update an archive's .meta (Wabbajack source + MO2 state)")
+    download_meta.add_argument("archive", help="Archive file name in the downloads folder, or a path")
+    meta_source = download_meta.add_mutually_exclusive_group()
+    meta_source.add_argument("--direct-url", help="Wabbajack directURL (GitHub release asset, CDN, ...)")
+    meta_source.add_argument("--manual-url", help="Wabbajack manualURL (for example a LoversLab file page)")
+    meta_source.add_argument("--nexus", metavar="MODID:FILEID", help="Nexus source: writes gameName, modID, fileID")
+    download_meta.add_argument("--header", action="append", metavar="'K: V'", help="Request header for --direct-url (repeatable; stored as directURLHeaders)")
+    download_meta.add_argument("--prompt", help="Text shown to the user for --manual-url")
+    download_meta.add_argument("--game-name", help="MO2 game short name for --nexus (default: derived from the instance, else SkyrimSE)")
+    meta_state = download_meta.add_mutually_exclusive_group()
+    meta_state.add_argument("--installed", dest="meta_installed", action="store_const", const=True, default=None)
+    meta_state.add_argument("--not-installed", dest="meta_installed", action="store_const", const=False)
+    download_meta.add_argument("--dry-run", action="store_true")
     download_fetch = dls.add_parser("fetch", help="Download HTTP(S) or NXM URL into downloads folder")
     download_fetch.add_argument("url")
     download_fetch.add_argument("--output")
@@ -280,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     download_fetch.add_argument("--game")
     download_fetch.add_argument("--file", dest="file_name")
     download_fetch.add_argument("--sha256")
+    download_fetch.add_argument("--header", action="append", metavar="'K: V'", help="Extra request header (repeatable); recorded as directURLHeaders")
     download_fetch.add_argument("--auto-download", "--auto", action="store_true", help="Automatically bypass 5s timer via browser for free accounts")
 
     manifest = sub.add_parser("manifest", help="Batch download, install, and arrange separators via manifest")
@@ -442,6 +458,16 @@ def _parse_key_values(values: list[str] | None, label: str) -> dict[str, str]:
             raise Mo2Error(f"{label} key cannot be empty.")
         result[key.strip()] = item.strip()
     return result
+
+
+def _parse_headers(values: list[str] | None) -> dict[str, str] | None:
+    headers: dict[str, str] = {}
+    for value in values or []:
+        name, separator, content = value.partition(":")
+        if not separator or not name.strip():
+            raise Mo2Error(f"Header must be 'Name: value': {value}")
+        headers[name.strip()] = content.strip()
+    return headers or None
 
 
 def _resolve_archive_input(instance: Instance, args: argparse.Namespace) -> tuple[str, dict[str, object] | None]:
@@ -745,6 +771,12 @@ def run(args: argparse.Namespace) -> int:
             from .downloads import sync_downloads
 
             _output(sync_downloads(instance), args.json)
+        elif args.downloads_command == "audit":
+            report = audit_downloads(instance)
+            _output(report, args.json)
+            return 0 if report["ok"] else 1
+        elif args.downloads_command == "meta":
+            _output(set_meta(instance, args.archive, args.direct_url, args.header, args.manual_url, args.prompt, args.nexus, args.game_name, args.meta_installed, args.dry_run), args.json)
         elif args.downloads_command == "mark-installed":
             from .downloads import mark_installed
 
@@ -753,7 +785,7 @@ def run(args: argparse.Namespace) -> int:
             if args.url.casefold().startswith("nxm://") or "nexusmods.com/" in args.url.casefold():
                 _output(download_reference(instance, args.url, args.nexus_api_key, args.game, args.file_name, args.output, args.replace, args.sha256, auto_download=getattr(args, "auto_download", False)), args.json)
             else:
-                _output(fetch_download(instance, args.url, args.output, args.replace, expected_sha256=args.sha256), args.json)
+                _output(fetch_download(instance, args.url, args.output, args.replace, headers=_parse_headers(args.header), expected_sha256=args.sha256), args.json)
     elif command == "manifest":
         _output(apply_manifest(instance, args.path, args.profile, args.nexus_api_key, args.dry_run, args.replace, args.continue_on_error, auto_download=getattr(args, "auto_download", False)), args.json)
     return 0
@@ -784,6 +816,8 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
     if command == "tools":
         return args.tools_command in {"register", "remove"} or (args.tools_command == "automate" and not args.dry_run)
     if command == "downloads":
+        if args.downloads_command == "meta":
+            return not args.dry_run
         return args.downloads_command in {"sync", "mark-installed", "fetch"}
     if command == "manifest":
         return not args.dry_run

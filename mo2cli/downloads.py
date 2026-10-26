@@ -6,8 +6,311 @@ import urllib.request
 from pathlib import Path
 
 from .archives import sha256
-from .metadata import IniDocument
+from .metadata import IniDocument, ModMetadata
 from .workspace import Instance, Mo2Error
+
+# Nexus domain names -> the short names MO2 (and therefore Wabbajack's
+# GetByMO2ArchiveName) uses in ``gameName``.
+MO2_GAME_NAMES = {
+    "skyrimspecialedition": "SkyrimSE",
+    "skyrim": "Skyrim",
+    "skyrimvr": "SkyrimVR",
+    "fallout4": "Fallout4",
+    "fallout4vr": "Fallout4VR",
+    "newvegas": "FalloutNV",
+    "fallout3": "Fallout3",
+    "oblivion": "Oblivion",
+    "morrowind": "Morrowind",
+    "starfield": "Starfield",
+}
+
+
+def mo2_game_name(value: str) -> str:
+    return MO2_GAME_NAMES.get(value.strip().casefold(), value.strip())
+
+
+def _http_url(value: str, label: str) -> str:
+    value = str(value).strip()
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise Mo2Error(f"{label} must be an absolute http(s) URL: {value!r}")
+    if any(char in value for char in "\r\n"):
+        raise Mo2Error(f"{label} cannot contain line breaks.")
+    return value
+
+
+def _positive_int(value: object, label: str) -> int:
+    try:
+        number = int(str(value).strip())
+    except ValueError:
+        raise Mo2Error(f"{label} must be a positive integer: {value!r}") from None
+    if number <= 0:
+        raise Mo2Error(f"{label} must be a positive integer: {value!r}")
+    return number
+
+
+def format_headers(headers: dict[str, str] | list[str] | None) -> str:
+    """Render request headers the way Wabbajack's ``directURLHeaders`` expects.
+
+    Each header is ``Name: value`` and headers are separated by ``|``.
+    """
+    if not headers:
+        return ""
+    items = [f"{key}: {value}" for key, value in headers.items()] if isinstance(headers, dict) else list(headers)
+    rendered = []
+    for item in items:
+        name, separator, value = str(item).partition(":")
+        if not separator or not name.strip():
+            raise Mo2Error(f"Header must look like 'Name: value': {item!r}")
+        if "|" in item or "\r" in item or "\n" in item:
+            raise Mo2Error(f"Header cannot contain '|' or line breaks: {item!r}")
+        rendered.append(f"{name.strip()}: {value.strip()}")
+    return "|".join(rendered)
+
+
+def write_meta(
+    meta_path: Path,
+    *,
+    direct_url: str | None = None,
+    direct_headers: dict[str, str] | list[str] | None = None,
+    manual_url: str | None = None,
+    prompt: str | None = None,
+    game_name: str | None = None,
+    mod_id: int | str | None = None,
+    file_id: int | str | None = None,
+    installed: bool | None = None,
+    uninstalled: bool | None = None,
+    name: str | None = None,
+    mod_name: str | None = None,
+    version: str | None = None,
+    repository: str | None = None,
+    url: str | None = None,
+    defaults: dict[str, object] | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Create or update one ``<archive>.meta`` sidecar.
+
+    This is the single place that writes Wabbajack source keys, so every code
+    path (``downloads fetch``, ``mods install <URL>``, manifests, Nexus
+    downloads, ``downloads meta``) produces the same syntax. Keys exactly as
+    Wabbajack reads them are ``directURL``, ``directURLHeaders`` (``|``
+    separated), ``manualURL``, ``prompt``, ``gameName``, ``modID`` and
+    ``fileID``; MO2's own keys (``installed``, ``uninstalled``, ``removed``,
+    ``name``, ``modName``, ``version``, ``repository``, ``url``) share the
+    ``[General]`` section. Arguments left as ``None`` are not touched and unknown
+    existing keys are preserved. ``defaults`` are written only when the key is
+    still absent. Returns the resulting ``[General]`` values.
+    """
+    existing = IniDocument.read(meta_path)
+    updates: dict[str, object] = {}
+    if direct_url is not None:
+        updates["directURL"] = _http_url(direct_url, "directURL")
+    if direct_headers:
+        if direct_url is None and existing.get("directURL", section="General") is None:
+            raise Mo2Error("directURLHeaders only make sense together with a directURL.")
+        updates["directURLHeaders"] = format_headers(direct_headers)
+    if manual_url is not None:
+        updates["manualURL"] = _http_url(manual_url, "manualURL")
+    if prompt is not None:
+        if manual_url is None and existing.get("manualURL", section="General") is None:
+            raise Mo2Error("prompt only makes sense together with a manualURL.")
+        if "\r" in prompt or "\n" in prompt:
+            raise Mo2Error("prompt cannot contain line breaks.")
+        updates["prompt"] = prompt
+    if (mod_id is None) != (file_id is None):
+        raise Mo2Error("Nexus sources need both modID and fileID.")
+    if mod_id is not None:
+        updates["modID"] = _positive_int(mod_id, "modID")
+        updates["fileID"] = _positive_int(file_id, "fileID")
+        if not game_name:
+            raise Mo2Error("Nexus sources need a gameName (for example SkyrimSE).")
+    if game_name:
+        updates["gameName"] = game_name
+    if installed is not None:
+        updates["installed"] = installed
+        updates["uninstalled"] = (not installed) if uninstalled is None else uninstalled
+    elif uninstalled is not None:
+        updates["uninstalled"] = uninstalled
+    for key, value in (("name", name), ("modName", mod_name), ("version", version), ("repository", repository), ("url", url)):
+        if value is not None:
+            updates[key] = value
+    document = existing
+    for key, value in updates.items():
+        document.set(key, value, section="General")
+    for key, value in (defaults or {}).items():
+        if document.get(key, section="General") is None:
+            document.set(key, value, section="General")
+    if not any(line.strip().casefold() == "[general]" for line in document.lines):
+        document.lines.insert(0, "[General]")
+    if not dry_run:
+        document.write(meta_path)
+    return document.as_dict("General")
+
+
+def wabbajack_source(values: dict[str, object]) -> str | None:
+    """Name the source Wabbajack would pick from ``[General]`` values, if any."""
+
+    def positive(key: str) -> bool:
+        try:
+            return int(str(values.get(key, "")).strip()) > 0
+        except ValueError:
+            return False
+
+    if values.get("gameName") and positive("modID") and positive("fileID"):
+        return "nexus"
+    if str(values.get("directURL") or "").strip():
+        return "directURL"
+    if str(values.get("manualURL") or "").strip():
+        return "manualURL"
+    return None
+
+
+_SHORT_GAME_NAMES = {
+    "skyrim special edition": "SkyrimSE",
+    "skyrim special edition (steam)": "SkyrimSE",
+    "skyrim": "Skyrim",
+    "skyrim vr": "SkyrimVR",
+    "fallout 4": "Fallout4",
+    "fallout new vegas": "FalloutNV",
+    "starfield": "Starfield",
+}
+
+
+def default_game_name(instance: Instance) -> str:
+    """MO2's short ``gameName`` for the instance, falling back to SkyrimSE."""
+    return _SHORT_GAME_NAMES.get(instance.game_name.casefold(), "SkyrimSE" if not instance.game_name else instance.game_name)
+
+
+def parse_nexus_ids(value: str) -> tuple[int, int]:
+    mod, separator, file = str(value).strip().partition(":")
+    if not separator:
+        raise Mo2Error(f"--nexus must be MODID:FILEID, got {value!r}")
+    return _positive_int(mod, "Nexus modID"), _positive_int(file, "Nexus fileID")
+
+
+def find_download(instance: Instance, archive: str | Path) -> Path:
+    """Resolve an archive given as a path or as a file name in the downloads folder."""
+    candidate = Path(archive).expanduser()
+    if candidate.is_file():
+        return candidate.resolve()
+    if candidate.name.endswith(".meta"):
+        candidate = candidate.with_name(candidate.name[:-5])
+    if instance.downloads_dir.is_dir():
+        wanted = candidate.name.casefold()
+        found = next((item for item in instance.downloads_dir.iterdir() if item.is_file() and item.name.casefold() == wanted), None)
+        if found is not None:
+            return found
+    raise Mo2Error(f"Download archive not found: {archive}")
+
+
+def set_meta(
+    instance: Instance,
+    archive: str | Path,
+    direct_url: str | None = None,
+    headers: list[str] | None = None,
+    manual_url: str | None = None,
+    prompt: str | None = None,
+    nexus: str | None = None,
+    game_name: str | None = None,
+    installed: bool | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Create or update ``<archive>.meta`` for a download (``downloads meta``)."""
+    sources = [bool(direct_url), bool(manual_url), bool(nexus)]
+    if sum(sources) > 1:
+        raise Mo2Error("Choose only one source: --direct-url, --manual-url or --nexus.")
+    if not any(sources) and installed is None:
+        raise Mo2Error("Nothing to write: give --direct-url, --manual-url, --nexus, or --installed/--not-installed.")
+    if headers and not direct_url:
+        raise Mo2Error("--header requires --direct-url.")
+    if prompt and not manual_url:
+        raise Mo2Error("--prompt requires --manual-url.")
+    mod_id = file_id = None
+    if nexus:
+        mod_id, file_id = parse_nexus_ids(nexus)
+    elif game_name:
+        raise Mo2Error("--game-name only applies to --nexus.")
+    path = find_download(instance, archive)
+    meta = path.with_name(path.name + ".meta")
+    is_new = not meta.is_file()
+    values = write_meta(
+        meta,
+        direct_url=direct_url,
+        direct_headers=headers,
+        manual_url=manual_url,
+        prompt=prompt,
+        game_name=(game_name or default_game_name(instance)) if nexus else None,
+        mod_id=mod_id,
+        file_id=file_id,
+        repository="Nexus" if nexus else None,
+        installed=installed,
+        name=path.name if is_new else None,
+        defaults={"installed": False, "uninstalled": False, "removed": False} if is_new else None,
+        dry_run=dry_run,
+    )
+    result: dict[str, object] = {"archive": path.name, "meta": str(meta), "created": is_new, "source": wabbajack_source(values), "values": values}
+    if dry_run:
+        result["dry_run"] = True
+    return result
+
+
+def audit_downloads(instance: Instance) -> dict[str, object]:
+    """Report what would stop Wabbajack from re-downloading every archive.
+
+    * archives without a ``.meta``;
+    * archives whose ``.meta`` has no source key Wabbajack understands;
+    * orphan ``.meta`` files (no archive next to them);
+    * installed mods whose ``installationFile`` is not in the downloads folder.
+    """
+    downloads = instance.downloads_dir
+    archives: dict[str, Path] = {}
+    metas: dict[str, Path] = {}
+    if downloads.is_dir():
+        for item in sorted(downloads.iterdir(), key=lambda entry: entry.name.casefold()):
+            if not item.is_file() or item.name.endswith(".part"):
+                continue
+            if item.name.casefold().endswith(".meta"):
+                metas[item.name[:-5].casefold()] = item
+            else:
+                archives[item.name.casefold()] = item
+    missing_meta: list[str] = []
+    missing_source: list[dict[str, object]] = []
+    sources: dict[str, int] = {}
+    for key, archive in archives.items():
+        meta = metas.get(key)
+        if meta is None:
+            missing_meta.append(archive.name)
+            continue
+        values = IniDocument.read(meta).as_dict("General")
+        source = wabbajack_source(values)
+        if source is None:
+            missing_source.append({"archive": archive.name, "unknownArchive": str(values.get("unknownArchive", "")).casefold() == "true"})
+        else:
+            sources[source] = sources.get(source, 0) + 1
+    orphan_meta = sorted((meta.name for key, meta in metas.items() if key not in archives), key=str.casefold)
+    missing_archive: list[dict[str, str]] = []
+    no_installation_file: list[str] = []
+    if instance.mods_dir.is_dir():
+        for mod in sorted(instance.mods_dir.iterdir(), key=lambda entry: entry.name.casefold()):
+            if not mod.is_dir() or mod.name.casefold().endswith("_separator"):
+                continue
+            values = ModMetadata.read(mod).values
+            installation_file = str(values.get("installationFile") or "").strip()
+            if not installation_file:
+                no_installation_file.append(mod.name)
+            elif Path(installation_file).name.casefold() not in archives:
+                missing_archive.append({"mod": mod.name, "installationFile": installation_file})
+    problems = len(missing_meta) + len(missing_source) + len(missing_archive)
+    return {
+        "ok": problems == 0,
+        "archives": len(archives),
+        "sources": sources,
+        "archives_without_meta": missing_meta,
+        "archives_without_wabbajack_source": missing_source,
+        "orphan_meta": orphan_meta,
+        "mods_missing_archive": missing_archive,
+        "mods_without_installation_file": no_installation_file,
+    }
 
 
 def list_downloads(instance: Instance, with_hash: bool = False) -> list[dict[str, object]]:
@@ -22,7 +325,13 @@ def list_downloads(instance: Instance, with_hash: bool = False) -> list[dict[str
     return result
 
 
-def fetch(instance: Instance, url: str, output: str | None = None, replace: bool = False, headers: dict[str, str] | None = None, expected_sha256: str | None = None) -> dict[str, object]:
+def fetch(instance: Instance, url: str, output: str | None = None, replace: bool = False, headers: dict[str, str] | None = None, expected_sha256: str | None = None, record_source: bool = True) -> dict[str, object]:
+    """Download ``url`` into the downloads folder and write its ``.meta``.
+
+    ``record_source`` also stores ``directURL`` (and ``directURLHeaders``) so
+    Wabbajack can re-download the archive. Callers that fetch short-lived signed
+    links (Nexus CDN) pass ``False`` and write their own source keys.
+    """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise Mo2Error("Only HTTP(S) downloads are supported.")
@@ -46,18 +355,21 @@ def fetch(instance: Instance, url: str, output: str | None = None, replace: bool
             raise Mo2Error(f"SHA-256 verification failed: expected {expected_sha256}, got {digest}")
         temporary.replace(target)
         meta_target = target.with_name(target.name + ".meta")
-        meta_doc = IniDocument.read(meta_target) if meta_target.is_file() else IniDocument()
-        meta_doc.set("url", url, section="General")
-        meta_doc.set("name", target.name, section="General")
-        if meta_doc.get("installed", section="General") is None:
-            meta_doc.set("installed", False, section="General")
-        if meta_doc.get("uninstalled", section="General") is None:
-            meta_doc.set("uninstalled", True, section="General")
-        meta_doc.write(meta_target)
+        write_meta(
+            meta_target,
+            url=url,
+            name=target.name,
+            direct_url=request_url if record_source else None,
+            direct_headers=headers if record_source and headers else None,
+            defaults={"installed": False, "uninstalled": True, "removed": False},
+        )
     finally:
         if temporary.exists():
             temporary.unlink()
-    return {"url": url, "path": str(target), "bytes": target.stat().st_size, "sha256": sha256(target)}
+    result = {"url": url, "path": str(target), "bytes": target.stat().st_size, "sha256": sha256(target)}
+    if record_source:
+        result["direct_url"] = request_url
+    return result
 
 
 def mark_installed(instance: Instance, archives: list[str | Path], installed: bool = True) -> list[dict[str, object]]:
