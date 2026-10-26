@@ -86,12 +86,25 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaises(Mo2Error):
             instance.materialize("Default", instance.mods_dir, replace=True)
 
-    def test_plugin_move_writes_loadorder_not_plugins(self):
+    def test_plugin_move_updates_order_without_changing_activation(self):
         root = self.make_instance()
         result = main(["plugins", "--instance", str(root), "--profile", "Default", "move", "Skyrim.esm", "0"])
         self.assertEqual(result, 0)
         self.assertEqual((root / "profiles" / "Default" / "loadorder.txt").read_text(), "Skyrim.esm\nTest.esp\n")
         self.assertEqual((root / "profiles" / "Default" / "plugins.txt").read_text(), "*Skyrim.esm\nTest.esp\n")
+
+    def test_plugin_move_syncs_plugins_subset_and_preserves_comments(self):
+        root = self.make_instance()
+        profile = root / "profiles" / "Default"
+        (profile / "loadorder.txt").write_text("Skyrim.esm\nUpdate.esm\nTest.esp\nMap.esp\n")
+        (profile / "plugins.txt").write_text("# activation\n*Map.esp\n# retained\nTest.esp\n")
+        result = main(["plugins", "--instance", str(root), "move", "Test.esp", "3"])
+        self.assertEqual(result, 0)
+        self.assertEqual((profile / "loadorder.txt").read_text(), "Skyrim.esm\nUpdate.esm\nMap.esp\nTest.esp\n")
+        self.assertEqual((profile / "plugins.txt").read_text(), "# activation\n*Map.esp\n# retained\nTest.esp\n")
+        result = main(["plugins", "--instance", str(root), "move", "Map.esp", "3"])
+        self.assertEqual(result, 0)
+        self.assertEqual((profile / "plugins.txt").read_text(), "# activation\nTest.esp\n# retained\n*Map.esp\n")
 
     def test_profile_lifecycle_and_selected_profile(self):
         instance = Instance.open(self.make_instance())
