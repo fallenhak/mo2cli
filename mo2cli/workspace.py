@@ -230,6 +230,10 @@ class Instance:
                 continue
             index, field = key.split("\\", 1)
             if index.isdigit():
+                if field == "arguments" and isinstance(value, str):
+                    if value.startswith('"') and value.endswith('"'):
+                        value = value[1:-1]
+                    value = re.sub(r'\\(["\\])', lambda match: match.group(1), value)
                 grouped.setdefault(index, {})[field] = value
         return [grouped[index] | {"index": int(index)} for index in sorted(grouped, key=lambda item: int(item))]
 

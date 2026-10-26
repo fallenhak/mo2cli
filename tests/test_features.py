@@ -694,6 +694,22 @@ class FeatureTests(unittest.TestCase):
         self.assertGreater(removed["removed_fields"], 0)
         self.assertNotIn(registered["index"], [item["index"] for item in self.instance.executables()])
 
+    def test_register_executable_preserves_quoted_arguments_for_qsettings(self):
+        binary = self.root / "Pandora.exe"
+        binary.write_bytes(b"test")
+        arguments = '--tesv "C:/Game Root" --output "C:/Pandora Output"'
+        registered = register_executable(self.instance, "Pandora", str(binary), arguments=arguments)
+        raw = (self.root / "ModOrganizer.ini").read_text()
+        expected = '"' + arguments.replace('"', '\\"') + '"'
+        self.assertIn(f'{registered["index"]}\\arguments={expected}', raw)
+        restored = next(item for item in self.instance.executables() if item["title"] == "Pandora")
+        self.assertEqual(restored["arguments"], arguments)
+        # QSettings removes optional outer quotes when MO2 writes the INI back.
+        rewritten = raw.replace(f'arguments={expected}', 'arguments=' + expected[1:-1])
+        (self.root / "ModOrganizer.ini").write_text(rewritten)
+        restored = next(item for item in self.instance.executables() if item["title"] == "Pandora")
+        self.assertEqual(restored["arguments"], arguments)
+
     def test_bodyslide_dry_run_builds_official_command_line(self):
         with patch(
             "mo2cli.tool_workflows.find_executable",

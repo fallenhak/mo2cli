@@ -50,7 +50,13 @@ def register_executable(
         "toolbar": False,
     }
     for field, value in fields.items():
-        document.set(f"{index}\\{field}", value, section="customExecutables")
+        # QSettings consumes literal quotes in unquoted INI values. Preserve
+        # command-line grouping through MO2 load/save by quoting the value
+        # and escaping its embedded quotes and backslashes.
+        rendered = value
+        if field == "arguments" and value:
+            rendered = '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
+        document.set(f"{index}\\{field}", rendered, section="customExecutables")
     document.write(instance.ini)
     return fields | {"index": index, "replaced": existing is not None}
 
