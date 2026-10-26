@@ -293,6 +293,33 @@ def build_parser() -> argparse.ArgumentParser:
     tool_run.add_argument("title")
     tool_run.add_argument("extra", nargs="*")
     tool_run.add_argument("--wait", action="store_true")
+    xedit_clean = tls.add_parser("xedit-clean", help="Quick auto clean one plugin with SSEEdit (-qac) inside USVFS and parse the log")
+    xedit_clean.add_argument("plugin")
+    xedit_clean.add_argument("--exe", help="SSEEdit executable (default: a registered SSEEdit/xEdit tool)")
+    xedit_clean.add_argument("--log-dir", help="Directory for -R: (default: <base>/Tools/xedit-logs)")
+    xedit_clean.add_argument("--capture-to", metavar="MOD", help="Move files that appeared in overwrite into this mod (created if missing)")
+    xedit_clean.add_argument("--usvfs-dir")
+    xedit_clean.add_argument("--moprofile", action="store_true", help="Also pass -moprofile:<profile>")
+    xedit_clean.add_argument("--force", action="store_true", help="Allow cleaning vanilla/Creation Club plugins")
+    xedit_clean.add_argument("--dry-run", action="store_true")
+    loot_sort = tls.add_parser("loot-sort", help="Sort with lootcli into a temporary file; --apply writes loadorder.txt and plugins.txt")
+    loot_sort.add_argument("--exe", help="lootcli.exe (default: registered tool or <instance>/loot/lootcli.exe)")
+    loot_sort.add_argument("--game", help="lootcli --game value (default SkyrimSE)")
+    loot_sort.add_argument("--apply", action="store_true", help="Write the sorted order (journaled, undoable)")
+    loot_sort.add_argument("--update-masterlist", action="store_true", help="Let lootcli download the masterlist (default: --skipUpdateMasterlist)")
+    loot_sort.add_argument("--dry-run", action="store_true")
+    bsarch_command = tls.add_parser("bsarch", help="Pack, unpack or list BSA archives with BSArch")
+    bsarch_command.add_argument("action", choices=("pack", "unpack", "list"))
+    bsarch_command.add_argument("first", help="pack: source folder; unpack/list: archive")
+    bsarch_command.add_argument("second", nargs="?", help="pack: archive to create; unpack: destination folder")
+    bsarch_command.add_argument("--exe", help="BSArch executable (default: a registered BSArch tool)")
+    bsarch_command.add_argument("--format", dest="fmt", default="sse", help="BSArch game switch without dash (sse, tes5, fo4, ...)")
+    bsarch_command.add_argument("--no-compress", action="store_true")
+    bsarch_command.add_argument("--no-mt", action="store_true")
+    bsarch_command.add_argument("--share", action="store_true", help="-share:yes (share identical files)")
+    bsarch_command.add_argument("--filter", action="append", metavar="MASK", help="File mask such as *.nif (repeatable)")
+    bsarch_command.add_argument("--capture-to", metavar="MOD", help="Move files that appeared in overwrite into this mod")
+    bsarch_command.add_argument("--dry-run", action="store_true")
     automate = tls.add_parser("automate", help="Run Pandora or BodySlide workflows with USVFS")
     automations = automate.add_subparsers(dest="automation", required=True)
     pandora = automations.add_parser("pandora", help="Run Pandora with saved patch selections")
@@ -870,6 +897,20 @@ def run(args: argparse.Namespace) -> int:
             _output(remove_executable(instance, args.target), args.json)
         elif args.tools_command == "run":
             _output(run_executable(instance, args.title, args.extra, args.wait), args.json)
+        elif args.tools_command == "xedit-clean":
+            from . import toolwrap
+
+            result = toolwrap.xedit_clean(instance, args.profile, args.plugin, args.exe, args.log_dir, args.capture_to, args.usvfs_dir, args.moprofile, args.force, args.dry_run)
+            _output(result, args.json)
+            return 0 if args.dry_run or result.get("ok") else 1
+        elif args.tools_command == "loot-sort":
+            from . import toolwrap
+
+            _output(toolwrap.loot_sort(instance, args.profile, args.exe, args.game, args.apply, args.update_masterlist, args.dry_run), args.json)
+        elif args.tools_command == "bsarch":
+            from . import toolwrap
+
+            _output(toolwrap.bsarch(instance, args.profile, args.action, args.first, args.second, args.exe, args.fmt, not args.no_compress, not args.no_mt, args.share, args.filter, args.capture_to, args.dry_run), args.json)
         elif args.automation == "pandora":
             _output(run_pandora(instance, args.profile, args.output_mod, args.separator, args.tesv, not args.no_auto_run, not args.no_auto_close, args.usvfs_dir, args.destination, args.dry_run), args.json)
         elif args.automation == "bodyslide":
@@ -937,7 +978,11 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
     if command == "files":
         return args.files_command == "materialize"
     if command == "tools":
-        return args.tools_command in {"register", "remove"} or (args.tools_command == "automate" and not args.dry_run)
+        if args.tools_command == "loot-sort":
+            return args.apply and not args.dry_run
+        if args.tools_command == "bsarch":
+            return bool(args.capture_to) and not args.dry_run
+        return args.tools_command in {"register", "remove"} or (args.tools_command in {"automate", "xedit-clean"} and not args.dry_run)
     if command == "downloads":
         if args.downloads_command == "meta":
             return not args.dry_run

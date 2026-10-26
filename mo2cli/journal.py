@@ -166,7 +166,7 @@ def _undo_mo2plugin(instance: Instance, details: dict[str, Any]) -> None:
 def undo_last(instance: Instance) -> dict[str, Any]:
     entries = _read(instance)
     undone = {str(entry.get("target")) for entry in entries if entry.get("operation") == "undo"}
-    target = next((entry for entry in reversed(entries) if entry.get("operation") in {"install", "remove", "rename", "separator_create", "separator_remove", "separator_group", "profile_delete", "mo2plugin_install", "mo2plugin_remove", "settings_set", "stockgame_create"} and entry.get("reversible") and str(entry.get("id")) not in undone), None)
+    target = next((entry for entry in reversed(entries) if entry.get("operation") in {"install", "remove", "rename", "separator_create", "separator_remove", "separator_group", "profile_delete", "mo2plugin_install", "mo2plugin_remove", "settings_set", "stockgame_create", "loot_apply", "overwrite_capture"} and entry.get("reversible") and str(entry.get("id")) not in undone), None)
     if target is None:
         raise Mo2Error("No reversible operation found.")
 
@@ -264,6 +264,26 @@ def undo_last(instance: Instance) -> dict[str, Any]:
             recovery = trash_root / f"undo-stockgame-{dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
             recovery.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(destination), str(recovery))
+    elif operation == "loot_apply":
+        _restore_profiles(instance, target)
+    elif operation == "overwrite_capture":
+        trash_root = instance.base / ".mo2cli-trash"
+        moved = [item for item in target.get("moved", []) if isinstance(item, dict)]
+        for item in moved:
+            source, destination = Path(str(item["from"])), Path(str(item["to"]))
+            if not _path_inside(source, instance.overwrite_dir) or not _path_inside(destination, instance.mods_dir):
+                raise Mo2Error("Capture undo target is outside safe directories; operation aborted.")
+            if item.get("replaced") and not _path_inside(Path(str(item["replaced"])), trash_root):
+                raise Mo2Error("Capture undo trash path is outside safe directories; operation aborted.")
+            if source.exists():
+                raise Mo2Error(f"Overwrite file already exists, not overwriting: {source}")
+        for item in moved:
+            source, destination = Path(str(item["from"])), Path(str(item["to"]))
+            if destination.is_file():
+                source.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(destination), str(source))
+            if item.get("replaced") and Path(str(item["replaced"])).is_file():
+                shutil.move(str(item["replaced"]), str(destination))
     elif operation == "settings_set":
         _restore_state_files(instance, target)
     elif operation in {"mo2plugin_install", "mo2plugin_remove"}:
