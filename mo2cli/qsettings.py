@@ -81,51 +81,67 @@ def encode_qcolor(color: str) -> str:
     """Render a ``QColor`` the way QSettings stores it (``@Variant``).
 
     MO2 saves a separator colour with ``metaFile.setValue("color", QColor)``
-    (modinforegular.cpp). QSettings serialises it as a ``QVariant`` data stream:
-    int32 type id 67 (QColor), a null flag byte, then the QColor itself: spec
-    ``Rgb`` (1) followed by alpha, red, green, blue and a pad as 16-bit values
-    (each 8-bit channel scaled by 257).
+    (modinforegular.cpp). QSettings serialises variants with a
+    ``QDataStream`` pinned to ``Qt_4_0`` (qsettings.cpp ``variantToString``),
+    which has no null flag: int32 type id 67 (QColor), then spec ``Rgb`` (1)
+    and alpha, red, green, blue and a pad as 16-bit values (each 8-bit channel
+    scaled by 257).
     """
     text = color.strip().lstrip("#")
     if len(text) != 6 or any(char not in _HEXDIGITS for char in text):
         raise ValueError(f"Colour must look like #RRGGBB: {color}")
     channels = [int(text[index : index + 2], 16) for index in (0, 2, 4)]
-    data = bytearray(_QCOLOR_TYPE_ID.to_bytes(4, "big")) + bytes([0, 1])
+    data = bytearray(_QCOLOR_TYPE_ID.to_bytes(4, "big")) + bytes([1])
     for channel in [255] + channels + [0]:
-        data += (channel * 257 if channel else 0).to_bytes(2, "big")
-    return "@Variant(" + _escape_bytes(bytes(data)) + ")"
+        data += (channel * 257).to_bytes(2, "big")
+    escaped, needs_quotes = _escape_bytes(bytes(data))
+    value = "@Variant(" + escaped + ")"
+    return f'"{value}"' if needs_quotes else value
 
 
-def _escape_bytes(data: bytes) -> str:
+_NAMED_ESCAPES = {7: "a", 8: "b", 12: "f", 10: "n", 13: "r", 9: "t", 11: "v"}
+
+
+def _escape_bytes(data: bytes) -> tuple[str, bool]:
+    """Qt's ``iniEscapedString`` for latin-1 bytes; also reports whether the value needs quotes."""
     backslash = chr(92)
     out: list[str] = []
-    after_hex = False
+    escape_next_if_digit = False
+    needs_quotes = False
     for byte in data:
         char = chr(byte)
+        if escape_next_if_digit and char in _HEXDIGITS:
+            out.append(f"{backslash}x{byte:x}")
+            continue
+        escape_next_if_digit = False
         if byte == 0:
             out.append(backslash + "0")
-            after_hex = False
+            escape_next_if_digit = True
+        elif byte in _NAMED_ESCAPES:
+            out.append(backslash + _NAMED_ESCAPES[byte])
+        elif char in ('"', backslash):
+            out.append(backslash + char)
+        elif char in ";,=":
+            needs_quotes = True
+            out.append(char)
         elif byte < 0x20 or byte >= 0x7F:
             out.append(f"{backslash}x{byte:x}")
-            after_hex = True
-        elif after_hex and char in _HEXDIGITS:
-            out.append(f"{backslash}x{byte:x}")
-        elif char == backslash:
-            out.append(backslash * 2)
-            after_hex = False
+            escape_next_if_digit = True
         else:
             out.append(char)
-            after_hex = False
-    return "".join(out)
+    return "".join(out), needs_quotes
 
 
 def decode_qcolor(value: str) -> str | None:
     """Inverse of :func:`encode_qcolor`; ``None`` when the value is no opaque RGB QColor variant."""
     value = value.strip()
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        value = value[1:-1]
     if not (value.startswith("@Variant(") and value.endswith(")")):
         return None
     body = value[len("@Variant(") : -1]
     backslash = chr(92)
+    named = {letter: byte for byte, letter in _NAMED_ESCAPES.items()}
     data = bytearray()
     index = 0
     while index < len(body):
@@ -145,12 +161,15 @@ def decode_qcolor(value: str) -> str | None:
                 data.append(0)
                 index += 2
                 continue
-            if following == backslash:
-                data.append(0x5C)
+            if following in named:
+                data.append(named[following])
                 index += 2
                 continue
+            data.append(ord(following) & 0xFF)
+            index += 2
+            continue
         data.append(ord(char) & 0xFF)
         index += 1
-    if len(data) != 16 or bytes(data[:4]) != _QCOLOR_TYPE_ID.to_bytes(4, "big") or data[5] != 1:
+    if len(data) != 15 or bytes(data[:4]) != _QCOLOR_TYPE_ID.to_bytes(4, "big") or data[4] != 1:
         return None
-    return "#{:02x}{:02x}{:02x}".format(data[8], data[10], data[12])
+    return "#{:02x}{:02x}{:02x}".format(data[7], data[9], data[11])

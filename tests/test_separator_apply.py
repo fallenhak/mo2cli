@@ -26,8 +26,13 @@ class SeparatorApplyTests(unittest.TestCase):
 
     def test_qcolor_variant_matches_qt_layout(self):
         value = qsettings.encode_qcolor("#8caae5")
-        self.assertEqual(value, "@Variant(" + chr(92) + "0" + chr(92) + "0" + chr(92) + "0C" + chr(92) + "0" + chr(92) + "x1" + (chr(92) + "xff") * 2
-                         + (chr(92) + "x8c") * 2 + (chr(92) + "xaa") * 2 + (chr(92) + "xe5") * 2 + chr(92) + "0" + chr(92) + "0)")
+        # QSettings streams variants as Qt_4_0 (no null flag) and escapes a hex digit after \0
+        self.assertEqual(value, r"@Variant(\0\0\0\x43\x1\xff\xff\x8c\x8c\xaa\xaa\xe5\xe5\0\0)")
+        self.assertEqual(qsettings.encode_qcolor("#ff0000"), r"@Variant(\0\0\0\x43\x1\xff\xff\xff\xff\0\0\0\0\0\0)")
+        # ',' and '=' force quotes, control bytes use named escapes
+        tricky = qsettings.encode_qcolor("#2c3d0a")
+        self.assertEqual(tricky, r'"@Variant(\0\0\0\x43\x1\xff\xff,,==\n\n\0\0)"')
+        self.assertEqual(qsettings.decode_qcolor(tricky), "#2c3d0a")
         self.assertEqual(qsettings.decode_qcolor(value), "#8caae5")
         self.assertEqual(qsettings.decode_qcolor(qsettings.encode_qcolor("#41ff00")), "#41ff00")
         self.assertIsNone(qsettings.decode_qcolor("@ByteArray(x)"))
