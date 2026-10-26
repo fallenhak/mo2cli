@@ -16,6 +16,8 @@ from .fomod import load_fomod_plus_record
 from .fomod_decisions import list_decisions
 from .formats import ModList, PluginList, write_text
 from .game import run_game
+from .github import fetch_asset as fetch_github_asset
+from .github import is_github_ref
 from .inis import diff_game_ini, get_value, list_inis, set_value
 from .installer import install_archive, remove_mod, rename_mod
 from .instance import initialize, initialize_portable
@@ -130,6 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--download-name")
     install.add_argument("--sha256")
     install.add_argument("--separator")
+    install.add_argument("--asset", help="Release asset glob when ARCHIVE is github:owner/repo@latest|TAG")
     install.add_argument("--auto-download", "--auto", action="store_true", help="Automatically bypass 5s timer via browser for free accounts")
     remove = ms.add_parser("remove", help="Move mod to recoverable trash")
     remove.add_argument("name")
@@ -333,6 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
     download_fetch.add_argument("--game")
     download_fetch.add_argument("--file", dest="file_name")
     download_fetch.add_argument("--sha256")
+    download_fetch.add_argument("--asset", help="Release asset glob when URL is github:owner/repo@latest|TAG")
     download_fetch.add_argument("--header", action="append", metavar="'K: V'", help="Extra request header (repeatable); recorded as directURLHeaders")
     download_fetch.add_argument("--auto-download", "--auto", action="store_true", help="Automatically bypass 5s timer via browser for free accounts")
 
@@ -532,7 +536,7 @@ def _parse_headers(values: list[str] | None) -> dict[str, str] | None:
 
 def _resolve_archive_input(instance: Instance, args: argparse.Namespace) -> tuple[str, dict[str, object] | None]:
     source = str(args.archive)
-    if args.dry_run and (source.casefold().startswith(("http://", "https://", "nxm://")) or "nexusmods.com/" in source.casefold()):
+    if args.dry_run and (source.casefold().startswith(("http://", "https://", "nxm://", "github:")) or "nexusmods.com/" in source.casefold()):
         raise Mo2Error("Remote mods are not downloaded during dry-run; plan without network access using manifest apply --dry-run.")
     if source.casefold().startswith("nxm://") or "nexusmods.com/" in source.casefold():
         download = download_reference(
@@ -546,6 +550,9 @@ def _resolve_archive_input(instance: Instance, args: argparse.Namespace) -> tupl
             args.sha256,
             auto_download=getattr(args, "auto_download", False),
         )
+        return str(download["path"]), download
+    if is_github_ref(source):
+        download = fetch_github_asset(instance, source, args.asset, args.download_name, args.replace, args.sha256)
         return str(download["path"]), download
     if source.casefold().startswith(("http://", "https://")):
         download = fetch_download(instance, source, args.download_name, args.replace, expected_sha256=args.sha256)
@@ -869,7 +876,9 @@ def run(args: argparse.Namespace) -> int:
 
             _output(mark_installed(instance, args.archive, installed=not args.uninstalled), args.json)
         else:
-            if args.url.casefold().startswith("nxm://") or "nexusmods.com/" in args.url.casefold():
+            if is_github_ref(args.url):
+                _output(fetch_github_asset(instance, args.url, args.asset, args.output, args.replace, args.sha256, headers=_parse_headers(args.header)), args.json)
+            elif args.url.casefold().startswith("nxm://") or "nexusmods.com/" in args.url.casefold():
                 _output(download_reference(instance, args.url, args.nexus_api_key, args.game, args.file_name, args.output, args.replace, args.sha256, auto_download=getattr(args, "auto_download", False)), args.json)
             else:
                 _output(fetch_download(instance, args.url, args.output, args.replace, headers=_parse_headers(args.header), expected_sha256=args.sha256), args.json)

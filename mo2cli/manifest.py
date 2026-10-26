@@ -8,6 +8,8 @@ from typing import Any
 from .downloads import fetch
 from .installer import install_archive
 from .journal import undo_last
+from .github import fetch_asset as fetch_github_asset
+from .github import is_github_ref
 from .nexus import NexusReference, download_reference, game_domain, parse_reference
 from .separators import ensure as ensure_separator
 from .separators import group as group_separator
@@ -232,6 +234,9 @@ def apply(
                 local_path = spec["source"]
             if local_path:
                 archive = str((source.parent / str(local_path)).resolve())
+            elif is_github_ref(str(spec.get("url") or "")):
+                download_result = fetch_github_asset(instance, str(spec["url"]), spec.get("asset"), spec.get("output"), bool(spec.get("replace", replace)), spec.get("sha256"))
+                archive = str(download_result["path"])
             elif spec.get("url") or (isinstance(spec.get("source"), str) and spec["source"].startswith(("http://", "https://"))):
                 url = str(spec.get("url") or spec.get("source"))
                 download_result = fetch(instance, url, spec.get("output"), bool(spec.get("replace", replace)), expected_sha256=spec.get("sha256"))
