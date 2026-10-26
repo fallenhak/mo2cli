@@ -369,6 +369,22 @@ def _mutate_list(args, instance: Instance, kind: str) -> None:
         except IndexError:
             raise Mo2Error(f"Target index out of range: {args.target}")
     write_text(file, model.render())
+    if kind == "plugins" and command == "move":
+        # SSE reads order as well as activation from plugins.txt. Keep the
+        # subset recorded there in loadorder.txt order without adding forced
+        # DLC entries or changing any enabled flags.
+        plugins_file = path / "plugins.txt"
+        plugins = PluginList.read(plugins_file)
+        rank = {entry.name.casefold(): index for index, entry in enumerate(model.entries)}
+        ordered = iter(sorted(
+            (entry for entry in plugins.entries if entry.name.casefold() in rank),
+            key=lambda entry: rank[entry.name.casefold()],
+        ))
+        plugins.lines = [
+            next(ordered) if not isinstance(line, str) and line.name.casefold() in rank else line
+            for line in plugins.lines
+        ]
+        write_text(plugins_file, plugins.render())
     print(f"Written: {file}")
 
 
