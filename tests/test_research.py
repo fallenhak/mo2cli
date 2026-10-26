@@ -1,5 +1,8 @@
 import json
+import tempfile
 import unittest
+import urllib.error
+from pathlib import Path
 from contextlib import redirect_stdout
 from io import StringIO
 from unittest.mock import patch
@@ -51,3 +54,32 @@ class CollectionTests(unittest.TestCase):
             code = main(["--json", "research", "collection", "bsyabf", "--revision", "2"])
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out.getvalue())["mods"][0]["modId"], 141001)
+
+
+LOL = {"data": {"name": "LoreRim", "version": "5.0.2", "slug": "lorerim", "author": {"name": "biggie_boss"}, "game": {"name": "TESV Skyrim SE"}, "updated": "2026-06-02",
+                "files": [{"name": "abc-modlist.txt", "clean_name": "modlist.txt", "size_in_bytes": 10, "content": ["+A", "-B"]},
+                          {"name": "def-plugins.txt", "clean_name": "plugins.txt", "size_in_bytes": 7, "content": ["*A.esp"]}]}}
+
+
+class LolTests(unittest.TestCase):
+    def test_lol_summary_and_save(self):
+        with tempfile.TemporaryDirectory() as temp, patch("mo2cli.research._http_json", return_value=LOL) as http:
+            result = research.lol("lorerim", save_to=temp, include_content=True)
+            self.assertTrue(http.call_args[0][0].endswith("/v1/lists/lorerim"))
+            self.assertEqual([item["name"] for item in result["files"]], ["modlist.txt", "plugins.txt"])
+            self.assertEqual(result["files"][0]["content"], ["+A", "-B"])
+            self.assertEqual((Path(temp) / "modlist.txt").read_bytes(), b"+A" + bytes([13, 10]) + b"-B" + bytes([13, 10]))
+        self.assertEqual(result["author"], "biggie_boss")
+
+    def test_lol_not_found(self):
+        error = urllib.error.HTTPError("u", 404, "nf", {}, None)
+        with patch("mo2cli.research.urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(Mo2Error):
+                research.lol("zzz")
+
+    def test_cli(self):
+        out = StringIO()
+        with patch("mo2cli.research._http_json", return_value=LOL), redirect_stdout(out):
+            code = main(["--json", "research", "lol", "lorerim"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["files"][1]["lines"], 1)

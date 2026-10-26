@@ -456,6 +456,10 @@ def build_parser() -> argparse.ArgumentParser:
     rs_collection.add_argument("slug", help="Collection slug, e.g. bsyabf")
     rs_collection.add_argument("--revision", type=int, help="Revision number (default: latest)")
     rs_collection.add_argument("--nexus-api-key")
+    rs_lol = rs.add_parser("lol", help="Fetch a Load Order Library list (modlist.txt / plugins.txt) by slug")
+    rs_lol.add_argument("slug")
+    rs_lol.add_argument("--save-to", metavar="DIR", help="Write the list files into this folder")
+    rs_lol.add_argument("--content", action="store_true", help="Include file lines in the JSON output")
 
     instance = sub.add_parser("instance", help="Initialize a data-only MO2 instance")
     _common(instance)
@@ -716,6 +720,14 @@ def run(args: argparse.Namespace) -> int:
                 print(f"{result['name']} ({result['slug']}) revision {result['revision']}: {result['listed']} mods, {result['optional']} optional")
                 for mod in result["mods"]:
                     print(f"modId={mod['modId']} fileId={mod['fileId']} version={mod['version']} optional={str(mod['optional']).lower()} name={mod['name']}")
+        else:
+            result = research.lol(args.slug, args.save_to, args.content)
+            if args.json:
+                _output(result, True)
+            else:
+                print(f"{result['name']} {result['version']} by {result['author']} ({result['game']})")
+                for item in result["files"]:
+                    print(f"file={item['name']} lines={item['lines']}" + (f" saved={item['saved']}" if item.get("saved") else ""))
         return 0
     if command == "instances":
         _output(list_instances(), args.json)
