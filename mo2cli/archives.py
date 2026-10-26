@@ -334,3 +334,101 @@ def extract_to_temp(path: Path) -> ExtractedArchive:
     except Exception:
         temp_dir.cleanup()
         raise
+
+
+def archive_common_root(records: list[dict[str, object]]) -> str | None:
+    """Return the single top-level folder that wraps every archive member.
+
+    ``None`` means the archive has several top-level entries, loose top-level
+    files, or no members at all.
+    """
+    roots: set[str] = set()
+    for item in records:
+        parts = PurePosixPath(str(item["name"]).replace("\\", "/")).parts
+        if not parts:
+            continue
+        if len(parts) == 1 and not item.get("directory"):
+            return None
+        roots.add(parts[0])
+    return next(iter(roots)) if len(roots) == 1 else None
+
+
+def _relative_files(root: Path) -> list[Path]:
+    return sorted(
+        (item.relative_to(root) for item in root.rglob("*") if item.is_file() or item.is_symlink()),
+        key=lambda item: item.as_posix().casefold(),
+    )
+
+
+def extract_to_directory(
+    archive: Path,
+    destination: Path,
+    strip_root: bool = False,
+    replace: bool = False,
+    dry_run: bool = False,
+    require: str | None = None,
+) -> dict[str, object]:
+    """Safely extract ``archive`` into ``destination``.
+
+    Members are validated by :func:`extract_archive` (zip-slip, links, device
+    names, size limits) and extracted into a private staging directory first;
+    only then are they copied into ``destination``. An existing non-empty
+    destination needs ``replace``, which overwrites colliding files in place and
+    never deletes anything else. ``require`` names a file that must exist in the
+    staged tree (after ``strip_root``), checked before ``destination`` is touched.
+    """
+    archive = Path(archive).expanduser().resolve()
+    destination = Path(destination).expanduser().resolve()
+    if not archive.is_file():
+        raise Mo2Error(f"Archive not found: {archive}")
+    if destination.is_file():
+        raise Mo2Error(f"Destination is a file, not a directory: {destination}")
+    occupied = destination.is_dir() and any(destination.iterdir())
+    if occupied and not replace:
+        raise Mo2Error(f"Destination is not empty; use --replace to overwrite files in place: {destination}")
+    records = list_archive(archive)
+    for item in records:
+        _safe_member(str(item["name"]))
+    root_name = archive_common_root(records) if strip_root else None
+    if strip_root and root_name is None:
+        raise Mo2Error("--strip-root requires every archive member to live inside one top-level folder.")
+    if dry_run:
+        members = []
+        for item in records:
+            if item.get("directory"):
+                continue
+            parts = PurePosixPath(str(item["name"]).replace("\\", "/")).parts
+            members.append("/".join(parts[1:] if root_name else parts))
+        return {
+            "dry_run": True,
+            "archive": str(archive),
+            "destination": str(destination),
+            "strip_root": root_name,
+            "overwrite_existing": occupied,
+            "files": len(members),
+            "sample": sorted(members, key=str.casefold)[:10],
+        }
+    staged = extract_to_temp(archive)
+    try:
+        source = staged.root / root_name if root_name else staged.root
+        files = _relative_files(source)
+        if require and not (source / Path(require)).is_file():
+            raise Mo2Error(f"Archive does not contain the expected file {require!r}; nothing was extracted.")
+        destination.mkdir(parents=True, exist_ok=True)
+        for relative in files:
+            target = destination / relative
+            if not target.resolve().is_relative_to(destination):
+                raise Mo2Error(f"Refusing to write outside the destination: {relative}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / relative, target)
+        for directory in sorted((item for item in source.rglob("*") if item.is_dir()), key=lambda item: str(item)):
+            (destination / directory.relative_to(source)).mkdir(parents=True, exist_ok=True)
+        return {
+            "archive": str(archive),
+            "destination": str(destination),
+            "strip_root": root_name,
+            "overwrite_existing": occupied,
+            "files": len(files),
+        }
+    finally:
+        staged.close()

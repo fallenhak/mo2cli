@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .archives import archive_stem, list_archive, sha256
+from .archives import archive_stem, extract_to_directory, list_archive, sha256
 from .downloads import fetch as fetch_download
 from .downloads import list_downloads
 from .fomod import inspect_archive as inspect_fomod
@@ -198,8 +198,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     archives = sub.add_parser("archive", help="Inspect and hash archive files")
     _common(archives)
-    archives.add_argument("archive_command", choices=("list", "hash", "info", "fomod"))
+    archives.add_argument("archive_command", choices=("list", "hash", "info", "fomod", "extract"))
     archives.add_argument("path")
+    archives.add_argument("--to", dest="extract_to", help="extract: destination directory")
+    archives.add_argument("--strip-root", action="store_true", help="extract: drop the single top-level folder that wraps the archive")
+    archives.add_argument("--replace", action="store_true", help="extract: allow a non-empty destination; colliding files are overwritten, nothing is deleted")
+    archives.add_argument("--dry-run", action="store_true", help="extract: validate and report without writing")
     archives.add_argument("--fomod-select", action="append", metavar="GROUP=PLUGIN[,PLUGIN...]", help="Apply selections while inspecting a FOMOD")
     archives.add_argument("--fomod-flag", action="append", metavar="KEY=VALUE", help="Seed a FOMOD condition flag")
     archives.add_argument("--fomod-game-version", help="Override the game version detected from the MO2 instance")
@@ -483,7 +487,11 @@ def run(args: argparse.Namespace) -> int:
         path = Path(args.path).expanduser().resolve()
         if not path.is_file():
             raise Mo2Error(f"Archive not found: {path}")
-        if args.archive_command == "list":
+        if args.archive_command == "extract":
+            if not args.extract_to:
+                raise Mo2Error("archive extract requires --to DIR.")
+            _output(extract_to_directory(path, Path(args.extract_to), args.strip_root, args.replace, args.dry_run), args.json)
+        elif args.archive_command == "list":
             _output(list_archive(path), args.json)
         elif args.archive_command == "hash":
             print(sha256(path))
