@@ -166,7 +166,7 @@ def _undo_mo2plugin(instance: Instance, details: dict[str, Any]) -> None:
 def undo_last(instance: Instance) -> dict[str, Any]:
     entries = _read(instance)
     undone = {str(entry.get("target")) for entry in entries if entry.get("operation") == "undo"}
-    target = next((entry for entry in reversed(entries) if entry.get("operation") in {"install", "remove", "rename", "separator_create", "separator_remove", "separator_group", "profile_delete", "mo2plugin_install", "mo2plugin_remove", "settings_set", "stockgame_create", "loot_apply", "overwrite_capture"} and entry.get("reversible") and str(entry.get("id")) not in undone), None)
+    target = next((entry for entry in reversed(entries) if entry.get("operation") in {"install", "remove", "rename", "separator_create", "separator_remove", "separator_group", "profile_delete", "mo2plugin_install", "mo2plugin_remove", "settings_set", "stockgame_create", "loot_apply", "manifest_order", "overwrite_capture"} and entry.get("reversible") and str(entry.get("id")) not in undone), None)
     if target is None:
         raise Mo2Error("No reversible operation found.")
 
@@ -266,6 +266,9 @@ def undo_last(instance: Instance) -> dict[str, Any]:
             shutil.move(str(destination), str(recovery))
     elif operation == "loot_apply":
         _restore_profiles(instance, target)
+    elif operation == "manifest_order":
+        _restore_profiles(instance, target)
+        _restore_state_files(instance, target)
     elif operation == "overwrite_capture":
         trash_root = instance.base / ".mo2cli-trash"
         moved = [item for item in target.get("moved", []) if isinstance(item, dict)]

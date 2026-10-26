@@ -437,6 +437,10 @@ def build_parser() -> argparse.ArgumentParser:
     manifest_apply.add_argument("--replace", action="store_true")
     manifest_apply.add_argument("--continue-on-error", action="store_true")
     manifest_apply.add_argument("--auto-download", "--auto", action="store_true", help="Automatically bypass 5s timer via browser for free accounts")
+    manifest_export = manifest_commands.add_parser("export", help="Write a reproducible manifest of this instance (mods with sources, separators with colors, order, MO2 plugins, settings, Stock Game version)")
+    manifest_export.add_argument("path", help="Manifest file to write (JSON)")
+    manifest_export.add_argument("--with-paths", action="store_true", help="Also record the local archive path of each mod (same machine only)")
+    manifest_export.add_argument("--settings-section", action="append", metavar="SECTION", help="ModOrganizer.ini section to include (repeatable; default: Settings, PluginPersistance, Plugins)")
 
     nexus = sub.add_parser("nexus", help="Nexus Mods account and automation utilities")
     _common(nexus)
@@ -1037,6 +1041,11 @@ def run(args: argparse.Namespace) -> int:
         else:
             _output(mo2plugins.remove(instance, args.name, args.dry_run), args.json)
     elif command == "manifest":
+        if args.manifest_command == "export":
+            from .manifest import export as export_manifest
+
+            _output(export_manifest(instance, args.path, args.profile, args.with_paths, args.settings_section), args.json)
+            return 0
         _output(apply_manifest(instance, args.path, args.profile, args.nexus_api_key, args.dry_run, args.replace, args.continue_on_error, auto_download=getattr(args, "auto_download", False)), args.json)
     return 0
 
@@ -1080,7 +1089,7 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
     if command == "mo2plugin":
         return args.mo2plugin_command in {"install", "remove"} and not args.dry_run
     if command == "manifest":
-        return not args.dry_run
+        return args.manifest_command == "apply" and not args.dry_run
     if command == "vfs":
         return args.vfs_command == "cleanup"
     return False

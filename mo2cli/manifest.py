@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
 
 from .downloads import fetch
+from .formats import ModList, read_text_exact, write_text
 from .installer import install_archive
 from .journal import undo_last
 from .github import fetch_asset as fetch_github_asset
@@ -85,9 +87,21 @@ def apply(
     source = Path(manifest_path).expanduser().resolve()
     root = load(source)
     selected_profile = _profiles_for_manifest(instance, profile, root)
-    mod_specs = _list(root.get("mods", []), "mods")
+    all_mod_specs = _list(root.get("mods", []), "mods")
     separator_specs = _list(root.get("separators", []), "separators")
-    result: dict[str, object] = {"manifest": str(source), "profile": selected_profile, "dry_run": dry_run, "separators": [], "mods": [], "groups": []}
+    _validate_extras(root)
+    # Entries without a source (exported with source_missing) and entries marked if_missing that are already installed are not installed again.
+    present = {entry.name.casefold() for entry in instance.profile_files(selected_profile)[1].entries}
+    mod_specs: list[dict[str, Any]] = []
+    skipped: list[dict[str, object]] = []
+    for item in all_mod_specs:
+        name = str(item.get("name") or "")
+        installed = bool(name) and (name.casefold() in present or (instance.mods_dir / name).is_dir())
+        if (item.get("if_missing") and installed) or (item.get("source_missing") and not any(item.get(key) for key in ("path", "url", "nexus", "nxm", "source"))):
+            skipped.append({"name": name, "present": installed, "reason": "already installed" if installed else "no source in manifest"})
+        else:
+            mod_specs.append(item)
+    result: dict[str, object] = {"manifest": str(source), "profile": selected_profile, "dry_run": dry_run, "separators": [], "mods": [], "groups": [], "skipped": skipped}
     if dry_run:
         for item in separator_specs:
             name = item.get("name")
@@ -152,6 +166,13 @@ def apply(
             result["mods"].append(preview)
         result["separators"] = dry_separators
         result["groups"] = [{"separator": item.get("name"), "mods": item.get("mods", [])} for item in separator_specs if item.get("mods")]
+        result["extras"] = {
+            "separator_colors": [item["name"] for item in separator_specs if item.get("color")],
+            "order": len(root.get("order") or []),
+            "mo2_plugins": [item["name"] for item in root.get("mo2_plugins") or []],
+            "settings": {section: len(values) for section, values in (root.get("settings") or {}).items()},
+            "stock_game": root.get("stock_game"),
+        }
         return result
 
     for spec in separator_specs:
@@ -338,5 +359,259 @@ def apply(
                 raise Mo2Error(f"Manifest grouping failed ({separator}): {error}.{detail}") from error
             result["groups"].append(grouped)
             _remember_journal(grouped, journal_ids)
+    try:
+        result["extras"] = _apply_extras(instance, root, separator_specs, selected_profile, journal_ids)
+    except (Mo2Error, OSError) as error:
+        errors.append({"extras": True, "error": str(error)})
+        if not continue_on_error:
+            rollback_errors = _rollback(instance, journal_ids)
+            detail = f" Rollback incomplete: {'; '.join(rollback_errors)}" if rollback_errors else ""
+            raise Mo2Error(f"Manifest extra sections failed: {error}.{detail}") from error
     result["errors"] = errors
     return result
+
+
+# --- export and the sections it writes (order, separator colors, MO2 plugins, settings, Stock Game) -----
+
+MANIFEST_VERSION = 2
+DEFAULT_SETTINGS_SECTIONS = ("Settings", "PluginPersistance", "Plugins")
+_VOLATILE_KEY = re.compile(r"geometry|splitter|windowstate|header|state$", re.IGNORECASE)
+
+
+def _meta(values: dict[str, object], key: str) -> str:
+    for name, value in values.items():
+        if name.casefold() == key.casefold():
+            return str(value).strip()
+    return ""
+
+
+def _positive(value: str) -> int | None:
+    try:
+        number = int(value)
+    except ValueError:
+        return None
+    return number if number > 0 else None
+
+
+def export(
+    instance: Instance,
+    output: str | Path,
+    profile: str | None = None,
+    with_paths: bool = False,
+    settings_sections: list[str] | None = None,
+) -> dict[str, object]:
+    """Write a manifest that ``apply`` can read back: mods with their sources, separators with colors, order, MO2 plugins, settings, Stock Game version."""
+    from . import mo2plugins, settings as ini_settings, stockgame
+    from .metadata import ModMetadata
+    from .separators import _display_name, get_color
+
+    selected = instance.profile_name(profile)
+    model = ModList.read(instance.profiles_dir / selected / "modlist.txt")
+    entries = model.entries
+    domain = game_domain(instance, None) if instance.game_name else None
+    destination = Path(output).expanduser().resolve()
+
+    # In modlist.txt the mods directly above a separator belong to it.
+    separator_of: dict[str, str] = {}
+    pending: list[str] = []
+    for entry in entries:
+        if entry.name.casefold().endswith("_separator"):
+            for name in pending:
+                separator_of[name] = _display_name(entry.name)
+            pending = []
+        else:
+            pending.append(entry.name)
+
+    separators: list[dict[str, object]] = []
+    mods: list[dict[str, object]] = []
+    for entry in entries:
+        path = instance.mods_dir / entry.name
+        if entry.name.casefold().endswith("_separator"):
+            item: dict[str, object] = {"name": _display_name(entry.name)}
+            color = get_color(path) if path.is_dir() else None
+            if color:
+                item["color"] = color
+            separators.append(item)
+            continue
+        values = ModMetadata.read(path).values if path.is_dir() else {}
+        spec: dict[str, object] = {"name": entry.name, "if_missing": True}
+        if entry.name in separator_of:
+            spec["separator"] = separator_of[entry.name]
+        if not entry.enabled:
+            spec["disabled"] = True
+        if _meta(values, "version"):
+            spec["version"] = _meta(values, "version")
+        mod_id, file_id = _positive(_meta(values, "modid")), _positive(_meta(values, "fileid"))
+        direct, manual = _meta(values, "directURL"), _meta(values, "manualURL")
+        installation = _meta(values, "installationFile")
+        archive = (instance.downloads_dir / Path(installation).name) if installation else None
+        if with_paths and archive is not None and archive.is_file():
+            spec["path"] = str(archive)
+        if mod_id and file_id and domain:
+            spec["nexus"] = {"game": domain, "mod_id": mod_id, "file_id": file_id}
+        elif direct:
+            spec["url"] = direct
+        if manual:
+            spec["manual_url"] = manual
+        if installation:
+            spec["installation_file"] = Path(installation).name
+        if not any(key in spec for key in ("path", "nexus", "url")):
+            spec["source_missing"] = True
+        mods.append(spec)
+
+    plugins: list[dict[str, object]] = []
+    try:
+        for name, value in sorted(mo2plugins.read_manifest(instance).items(), key=lambda item: item[0].casefold()):
+            plugins.append({"name": name, "archive": value.get("archive")})
+    except Mo2Error:
+        pass
+
+    settings: dict[str, dict[str, str]] = {}
+    for section in settings_sections or list(DEFAULT_SETTINGS_SECTIONS):
+        try:
+            items = ini_settings.list_settings(instance, section, raw=True)
+        except Mo2Error:
+            continue
+        kept = {str(item["key"]): str(item["value"]) for item in items if not _VOLATILE_KEY.search(str(item["key"]))}
+        if kept:
+            settings[section] = kept
+
+    manifest: dict[str, object] = {
+        "manifest_version": MANIFEST_VERSION,
+        "profile": selected,
+        "game": instance.game_name,
+        "separators": separators,
+        "mods": mods,
+        "order": [{"name": entry.name, "enabled": entry.enabled} for entry in entries],
+    }
+    if plugins:
+        manifest["mo2_plugins"] = plugins
+    if settings:
+        manifest["settings"] = settings
+    stock = instance.base / "Stock Game"
+    if stock.is_dir():
+        try:
+            version = stockgame.verify(stock)["version"]
+        except Mo2Error:
+            version = None
+        if version:
+            manifest["stock_game"] = {"expected_version": version}
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {
+        "output": str(destination),
+        "profile": selected,
+        "mods": len(mods),
+        "separators": len(separators),
+        "source_missing": [item["name"] for item in mods if item.get("source_missing")],
+        "mo2_plugins": len(plugins),
+        "settings_sections": sorted(settings),
+        "stock_game": manifest.get("stock_game"),
+    }
+
+
+def _validate_extras(root: dict[str, Any]) -> None:
+    order = root.get("order")
+    if order is not None and (not isinstance(order, list) or any(not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in order)):
+        raise Mo2Error("Manifest order must be a list of {name, enabled} objects.")
+    plugins = root.get("mo2_plugins")
+    if plugins is not None and (not isinstance(plugins, list) or any(not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in plugins)):
+        raise Mo2Error("Manifest mo2_plugins must be a list of {name, archive} objects.")
+    settings = root.get("settings")
+    if settings is not None and (not isinstance(settings, dict) or any(not isinstance(value, dict) for value in settings.values())):
+        raise Mo2Error("Manifest settings must be {section: {key: value}}.")
+    stock = root.get("stock_game")
+    if stock is not None and not isinstance(stock, dict):
+        raise Mo2Error("Manifest stock_game must be an object.")
+
+
+def _apply_extras(instance: Instance, root: dict[str, Any], separator_specs: list[dict[str, Any]], profile: str, journal_ids: list[str]) -> dict[str, object]:
+    """Order/enabled state, separator colors, MO2 plugins, settings and the Stock Game check."""
+    from . import mo2plugins, settings as ini_settings, stockgame
+    from .journal import record
+    from .separators import _find_separator_path, get_color, set_color
+
+    extras: dict[str, object] = {}
+    modlist_path = instance.profiles_dir / profile / "modlist.txt"
+    profiles_backup: list[dict[str, str]] = []
+    state_files: list[dict[str, object]] = []
+
+    colors = [(str(spec["name"]), str(spec["color"])) for spec in separator_specs if isinstance(spec.get("name"), str) and spec.get("color")]
+    recolored: list[str] = []
+    for name, color in colors:
+        path = _find_separator_path(instance, name)
+        if path is None:
+            continue
+        if (get_color(path) or "").casefold() == color.casefold():
+            continue
+        meta = path / "meta.ini"
+        state_files.append({"path": str(meta), "exists": meta.is_file(), "content": read_text_exact(meta) if meta.is_file() else ""})
+        set_color(path, color)
+        recolored.append(name)
+    extras["separator_colors"] = recolored
+
+    order = root.get("order")
+    if isinstance(order, list) and order:
+        profiles_backup.append({"path": str(modlist_path), "content": read_text_exact(modlist_path) if modlist_path.exists() else ""})
+        model = ModList.read(modlist_path)
+        rank = {str(item["name"]).casefold(): index for index, item in enumerate(order)}
+        present = [entry for entry in model.entries if entry.name.casefold() in rank]
+        queue = iter(sorted(present, key=lambda entry: rank[entry.name.casefold()]))
+        model.lines = [next(queue) if not isinstance(line, str) and line.name.casefold() in rank else line for line in model.lines]
+        for item in order:
+            found = model.find(str(item["name"]))
+            if found is not None and "enabled" in item and found.enabled != bool(item["enabled"]):
+                model.set_enabled(found.name, bool(item["enabled"]))
+        write_text(modlist_path, model.render())
+        extras["order"] = {"applied": len(present), "missing": [str(item["name"]) for item in order if model.find(str(item["name"])) is None]}
+    if profiles_backup or state_files:
+        entry = record(instance, "manifest_order", profiles=profiles_backup, state_files=state_files)
+        journal_ids.append(entry["id"])
+
+    wanted = root.get("mo2_plugins") or []
+    if wanted:
+        outcomes = []
+        installed = {item["name"].casefold() for item in mo2plugins.list_installed(instance)}
+        for item in wanted:
+            name, archive = str(item["name"]), item.get("archive")
+            if name.casefold() in installed:
+                outcomes.append({"name": name, "status": "present"})
+                continue
+            candidate = instance.downloads_dir / Path(str(archive)).name if archive else None
+            if candidate is not None and candidate.is_file():
+                installed_result = mo2plugins.install(instance, candidate, name)
+                _remember_journal(installed_result, journal_ids)
+                outcomes.append({"name": name, "status": "installed"})
+            else:
+                outcomes.append({"name": name, "status": "missing", "archive": archive})
+        extras["mo2_plugins"] = outcomes
+
+    settings = root.get("settings") or {}
+    applied = []
+    for section, values in settings.items():
+        for key, value in values.items():
+            current = None
+            try:
+                current = ini_settings.get_setting(instance, section, key, raw=True)["raw"]
+            except Mo2Error:
+                pass
+            if current == str(value):
+                continue
+            changed = ini_settings.set_setting(instance, section, key, str(value), raw=True)
+            _remember_journal(changed, journal_ids)
+            applied.append(f"{section}/{key}")
+    if settings:
+        extras["settings_changed"] = applied
+
+    stock = root.get("stock_game")
+    if isinstance(stock, dict) and stock.get("expected_version"):
+        directory = instance.base / "Stock Game"
+        if directory.is_dir():
+            try:
+                verified = stockgame.verify(directory, str(stock["expected_version"]))
+                extras["stock_game"] = {"expected_version": stock["expected_version"], "version": verified.get("version"), "ok": verified["ok"]}
+            except Mo2Error as error:
+                extras["stock_game"] = {"expected_version": stock["expected_version"], "ok": False, "error": str(error)}
+        else:
+            extras["stock_game"] = {"expected_version": stock["expected_version"], "ok": False, "error": "Stock Game folder not found"}
+    return extras
