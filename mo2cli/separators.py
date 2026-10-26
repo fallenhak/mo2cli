@@ -4,6 +4,7 @@ import datetime as dt
 import shutil
 from pathlib import Path
 
+from . import qsettings
 from .formats import ModList, read_text_exact, write_text
 from .journal import record
 from .workspace import Instance, Mo2Error, _safe_name
@@ -83,6 +84,45 @@ def _initialize_metadata(path: Path) -> None:
     write_text(path / "meta.ini", "modid=0\r\nversion=\r\nnewestVersion=\r\ncategory=0\r\ninstallationFile=\r\n")
 
 
+def _normalize_color(color: str) -> str:
+    qsettings.encode_qcolor(color)
+    return "#" + color.strip().lstrip("#").lower()
+
+
+def get_color(path: Path) -> str | None:
+    meta = path / "meta.ini"
+    if not meta.is_file():
+        return None
+    for line in read_text_exact(meta).splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "color":
+            return qsettings.decode_qcolor(value)
+    return None
+
+
+def set_color(path: Path, color: str) -> bool:
+    """Write the separator colour into ``meta.ini``; returns False when unchanged."""
+    value = qsettings.encode_qcolor(color)
+    meta = path / "meta.ini"
+    if not meta.is_file():
+        _initialize_metadata(path)
+    text = read_text_exact(meta)
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines()
+    new_line = f"color={value}"
+    for index, line in enumerate(lines):
+        if line.partition("=")[0].strip() == "color":
+            if line == new_line:
+                return False
+            lines[index] = new_line
+            break
+    else:
+        general = next((i for i, line in enumerate(lines) if line.strip().casefold() == "[general]"), None)
+        lines.insert(general + 1 if general is not None else len(lines), new_line)
+    write_text(meta, newline.join(lines) + newline)
+    return True
+
+
 def _place(model: ModList, name: str, before: str | None, after: str | None) -> None:
     if before and after:
         raise Mo2Error("Cannot specify --before and --after simultaneously.")
@@ -98,7 +138,9 @@ def _place(model: ModList, name: str, before: str | None, after: str | None) -> 
     model.move(name, min(target_index, len(model.entries) - 1))
 
 
-def create(instance: Instance, profile: str | None, name: str, before: str | None = None, after: str | None = None, all_profiles: bool = False) -> dict[str, object]:
+def create(instance: Instance, profile: str | None, name: str, before: str | None = None, after: str | None = None, all_profiles: bool = False, color: str | None = None) -> dict[str, object]:
+    if color is not None:
+        qsettings.encode_qcolor(color)  # validate before touching anything
     internal = internal_name(name)
     existing = _find_separator_path(instance, name)
     if existing is not None:
@@ -109,6 +151,8 @@ def create(instance: Instance, profile: str | None, name: str, before: str | Non
     path = instance.mods_dir / internal
     path.mkdir(parents=False)
     _initialize_metadata(path)
+    if color is not None:
+        set_color(path, color)
     try:
         for profile_name in profiles:
             profile_path = instance.profiles_dir / profile_name
@@ -124,7 +168,120 @@ def create(instance: Instance, profile: str | None, name: str, before: str | Non
             write_text(Path(backup["path"]), backup["content"])
         shutil.rmtree(path, ignore_errors=True)
         raise
-    return {"separator": _display_name(internal), "internal_name": internal, "path": str(path), "profiles": profiles, "journal_id": entry["id"]}
+    return {"separator": _display_name(internal), "internal_name": internal, "path": str(path), "profiles": profiles, "color": color and _normalize_color(color), "journal_id": entry["id"]}
+
+
+def parse_separator_list(text: str) -> list[tuple[str, str | None]]:
+    """Parse an ordered separator list: one ``Name`` or ``Name | #RRGGBB`` per line.
+
+    Blank lines and lines starting with ``;`` or ``//`` are ignored. The order is
+    the order shown in MO2's mod list, top to bottom.
+    """
+    result: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith(";") or line.startswith("//"):
+            continue
+        name, bar, color_text = line.partition("|")
+        name = _display_name(name.strip())
+        color = color_text.strip() or None
+        if not name:
+            raise Mo2Error(f"Separator list line {number} has no name.")
+        if bar and color is None:
+            raise Mo2Error(f"Separator list line {number} has an empty colour.")
+        if color is not None:
+            try:
+                color = _normalize_color(color)
+            except ValueError as error:
+                raise Mo2Error(f"Separator list line {number}: {error}") from error
+        _safe_name(name)
+        if name.casefold() in seen:
+            raise Mo2Error(f"Separator list line {number} repeats '{name}'.")
+        seen.add(name.casefold())
+        result.append((name, color))
+    if not result:
+        raise Mo2Error("Separator list is empty.")
+    return result
+
+
+def apply_list(instance: Instance, profile: str | None, list_file: str | Path, dry_run: bool = False) -> dict[str, object]:
+    """Create missing separators, set colours and order them as listed. Safe to repeat.
+
+    Separators are only moved when they are out of order relative to the previous
+    listed separator; mods between them stay where they are.
+    """
+    path = Path(list_file).expanduser()
+    if not path.is_file():
+        raise Mo2Error(f"Separator list not found: {path}")
+    wanted = parse_separator_list(path.read_text(encoding="utf-8-sig"))
+    selected = instance.profile_name(profile)
+    modlist_path = instance.profiles_dir / selected / "modlist.txt"
+    model = ModList.read(modlist_path)
+    created: list[str] = []
+    recolored: list[str] = []
+    moved: list[str] = []
+    actual: list[str] = []
+    for name, color in wanted:
+        entry = _find_separator_entry(model, name)
+        directory = _find_separator_path(instance, name)
+        if entry is None:
+            created.append(name)
+            model.add(internal_name(name), enabled=True)
+            entry = model.find(internal_name(name))
+        actual.append(entry.name)
+        if color is not None and (directory is None or get_color(directory) != color):
+            recolored.append(name)
+    # MO2 writes modlist.txt in reverse of the visible order: a separator shown
+    # below another one must come before it in the file.
+    for previous, current in zip(actual, actual[1:]):
+        entries = model.entries
+        previous_index = next(i for i, e in enumerate(entries) if e.name.casefold() == previous.casefold())
+        current_index = next(i for i, e in enumerate(entries) if e.name.casefold() == current.casefold())
+        if current_index > previous_index:
+            model.move(current, previous_index)
+            moved.append(_display_name(current))
+    result: dict[str, object] = {
+        "profile": selected,
+        "separators": len(wanted),
+        "created": created,
+        "recolored": recolored,
+        "moved": moved,
+        "changed": bool(created or recolored or moved),
+    }
+    if dry_run:
+        result["dry_run"] = True
+        return result
+    if not result["changed"]:
+        return result
+    profiles = _backups(instance, [selected])
+    meta_states = []
+    for name, _ in wanted:
+        directory = _find_separator_path(instance, name)
+        if directory is not None and (directory / "meta.ini").is_file():
+            meta_states.append({"path": str(directory / "meta.ini"), "exists": True, "content": read_text_exact(directory / "meta.ini")})
+    created_dirs = []
+    for name in created:
+        instance.mods_dir.mkdir(parents=True, exist_ok=True)
+        directory = instance.mods_dir / internal_name(name)
+        directory.mkdir(parents=False, exist_ok=True)
+        _initialize_metadata(directory)
+        created_dirs.append(str(directory))
+    for name, color in wanted:
+        if color is not None and name in recolored:
+            set_color(_find_separator_path(instance, name), color)
+    write_text(modlist_path, model.render())
+    entry = record(
+        instance,
+        "separator_group",
+        separator="(apply list)",
+        profiles=profiles,
+        state_files=meta_states,
+        names=[name for name, _ in wanted],
+        created_dirs=created_dirs,
+    )
+    result["journal_id"] = entry["id"]
+    return result
 
 
 def ensure(instance: Instance, profile: str | None, name: str, before: str | None = None, after: str | None = None) -> dict[str, object]:

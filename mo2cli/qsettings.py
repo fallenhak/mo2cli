@@ -71,3 +71,86 @@ def encode_byte_array(value: str) -> str:
     if any(char in text for char in ";,="):
         text = '"' + text.replace('"', '\\"') + '"'
     return "@ByteArray(" + text + ")"
+
+
+_HEXDIGITS = "0123456789abcdefABCDEF"
+_QCOLOR_TYPE_ID = 67  # QMetaType::QColor
+
+
+def encode_qcolor(color: str) -> str:
+    """Render a ``QColor`` the way QSettings stores it (``@Variant``).
+
+    MO2 saves a separator colour with ``metaFile.setValue("color", QColor)``
+    (modinforegular.cpp). QSettings serialises it as a ``QVariant`` data stream:
+    int32 type id 67 (QColor), a null flag byte, then the QColor itself: spec
+    ``Rgb`` (1) followed by alpha, red, green, blue and a pad as 16-bit values
+    (each 8-bit channel scaled by 257).
+    """
+    text = color.strip().lstrip("#")
+    if len(text) != 6 or any(char not in _HEXDIGITS for char in text):
+        raise ValueError(f"Colour must look like #RRGGBB: {color}")
+    channels = [int(text[index : index + 2], 16) for index in (0, 2, 4)]
+    data = bytearray(_QCOLOR_TYPE_ID.to_bytes(4, "big")) + bytes([0, 1])
+    for channel in [255] + channels + [0]:
+        data += (channel * 257 if channel else 0).to_bytes(2, "big")
+    return "@Variant(" + _escape_bytes(bytes(data)) + ")"
+
+
+def _escape_bytes(data: bytes) -> str:
+    backslash = chr(92)
+    out: list[str] = []
+    after_hex = False
+    for byte in data:
+        char = chr(byte)
+        if byte == 0:
+            out.append(backslash + "0")
+            after_hex = False
+        elif byte < 0x20 or byte >= 0x7F:
+            out.append(f"{backslash}x{byte:x}")
+            after_hex = True
+        elif after_hex and char in _HEXDIGITS:
+            out.append(f"{backslash}x{byte:x}")
+        elif char == backslash:
+            out.append(backslash * 2)
+            after_hex = False
+        else:
+            out.append(char)
+            after_hex = False
+    return "".join(out)
+
+
+def decode_qcolor(value: str) -> str | None:
+    """Inverse of :func:`encode_qcolor`; ``None`` when the value is no opaque RGB QColor variant."""
+    value = value.strip()
+    if not (value.startswith("@Variant(") and value.endswith(")")):
+        return None
+    body = value[len("@Variant(") : -1]
+    backslash = chr(92)
+    data = bytearray()
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if char == backslash and index + 1 < len(body):
+            following = body[index + 1]
+            if following == "x":
+                end = index + 2
+                while end < len(body) and end < index + 4 and body[end] in _HEXDIGITS:
+                    end += 1
+                if end == index + 2:
+                    return None
+                data.append(int(body[index + 2 : end], 16))
+                index = end
+                continue
+            if following == "0":
+                data.append(0)
+                index += 2
+                continue
+            if following == backslash:
+                data.append(0x5C)
+                index += 2
+                continue
+        data.append(ord(char) & 0xFF)
+        index += 1
+    if len(data) != 16 or bytes(data[:4]) != _QCOLOR_TYPE_ID.to_bytes(4, "big") or data[5] != 1:
+        return None
+    return "#{:02x}{:02x}{:02x}".format(data[8], data[10], data[12])

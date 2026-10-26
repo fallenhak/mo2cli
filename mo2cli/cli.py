@@ -31,6 +31,7 @@ from .plugins import ordered_entries as ordered_plugin_entries
 from .plugins import remove_plugin_entries, sync_plugin_lists
 from .profiles import export_profile, import_profile
 from .safety import mutation_guard
+from .separators import apply_list as apply_separator_list
 from .separators import create as create_separator
 from .separators import ensure as ensure_separator
 from .separators import group as group_separator
@@ -153,6 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
     separator_create.add_argument("--before")
     separator_create.add_argument("--after")
     separator_create.add_argument("--all-profiles", action="store_true")
+    separator_create.add_argument("--color", help="Separator colour as #RRGGBB (stored as a QColor variant in meta.ini)")
+    separator_apply = ss.add_parser("apply", help="Create/colour/order separators from a list file (idempotent)")
+    separator_apply.add_argument("listfile", help="One 'Name' or 'Name | #RRGGBB' per line, top to bottom as shown in MO2")
+    separator_apply.add_argument("--dry-run", action="store_true")
     separator_remove = ss.add_parser("remove")
     separator_remove.add_argument("name")
     separator_remove.add_argument("--yes", action="store_true")
@@ -647,7 +652,9 @@ def run(args: argparse.Namespace) -> int:
             if args.separator_command == "list":
                 _output(list_separators(instance, args.profile), args.json)
             elif args.separator_command == "create":
-                _output(create_separator(instance, args.profile, args.name, args.before, args.after, args.all_profiles), args.json)
+                _output(create_separator(instance, args.profile, args.name, args.before, args.after, args.all_profiles, args.color), args.json)
+            elif args.separator_command == "apply":
+                _output(apply_separator_list(instance, args.profile, args.listfile, args.dry_run), args.json)
             elif args.separator_command == "remove":
                 _output(remove_separator(instance, args.profile, args.name, args.purge, args.yes), args.json)
             else:

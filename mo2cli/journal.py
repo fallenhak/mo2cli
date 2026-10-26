@@ -85,7 +85,7 @@ def _restore_profiles(instance: Instance, details: dict[str, Any]) -> None:
 
 
 def _restore_state_files(instance: Instance, details: dict[str, Any]) -> None:
-    allowed_roots = (instance.profiles_dir, instance.downloads_dir)
+    allowed_roots = (instance.profiles_dir, instance.downloads_dir, instance.mods_dir)
     for item in details.get("state_files", []):
         path = Path(str(item["path"]))
         if path.resolve() != instance.ini.resolve() and not any(_path_inside(path, root) for root in allowed_roots):
@@ -101,7 +101,7 @@ def _validate_postconditions(instance: Instance, details: dict[str, Any]) -> Non
     conditions = details.get("postconditions")
     if not isinstance(conditions, list):
         raise Mo2Error("Journal entry predates undo freshness checks; refusing to overwrite current state.")
-    allowed_roots = (instance.profiles_dir, instance.downloads_dir)
+    allowed_roots = (instance.profiles_dir, instance.downloads_dir, instance.mods_dir)
     for expected in conditions:
         if not isinstance(expected, dict) or not expected.get("path"):
             raise Mo2Error("Journal entry contains an invalid undo precondition.")
@@ -231,7 +231,14 @@ def undo_last(instance: Instance) -> dict[str, Any]:
         shutil.move(str(trash), str(path))
         _restore_profiles(instance, target)
     elif operation == "separator_group":
+        for item in target.get("created_dirs", []):
+            created = Path(str(item))
+            if not _path_inside(created, instance.mods_dir):
+                raise Mo2Error("Separator undo target is outside mods directory; operation aborted.")
+            if created.is_dir() and all(child.name.casefold() == "meta.ini" for child in created.iterdir()):
+                shutil.rmtree(created)
         _restore_profiles(instance, target)
+        _restore_state_files(instance, target)
     elif operation == "profile_delete":
         destination = Path(str(target["destination"]))
         trash = Path(str(target.get("trash") or ""))
