@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import urllib.parse
 import urllib.request
@@ -405,6 +406,8 @@ def mark_installed(instance: Instance, archives: list[str | Path], installed: bo
 
 def sync_downloads(instance: Instance) -> dict[str, object]:
     """Synchronize download archive .meta states with installed mods, plugins, and tools."""
+    from . import mo2plugins  # imported here: mo2plugins itself builds on write_meta
+
     if not instance.downloads_dir.exists():
         return {"updated": [], "already_installed": 0, "unmatched": []}
 
@@ -450,6 +453,8 @@ def sync_downloads(instance: Instance) -> dict[str, object]:
     has_rootbuilder = (instance.base / "plugins" / "rootbuilder").is_dir() or any(
         p.name.casefold() == "rootbuilder.py" for p in (instance.base / "plugins").glob("*")
     ) if (instance.base / "plugins").is_dir() else False
+    has_fomod_plus = mo2plugins.has_plugin_markers(instance, "fomod plus", "fomodplus", "fomod_plus")
+    managed_plugin_archives = mo2plugins.installed_archive_names(instance)
 
     has_mo2 = (instance.base / "ModOrganizer.exe").is_file()
 
@@ -497,6 +502,12 @@ def sync_downloads(instance: Instance) -> dict[str, object]:
                         match_reason = f"matched modID {mid} ({matching_mods})"
                 except (ValueError, TypeError):
                     pass
+
+        if not match_reason and archive_name_lower in managed_plugin_archives:
+            match_reason = f"matched MO2 plugin installed by mo2cli ({managed_plugin_archives[archive_name_lower]})"
+
+        if not match_reason and has_fomod_plus and re.search(r"fomod[ ._-]*plus", archive_name_lower):
+            match_reason = "matched installed MO2 plugin FOMOD Plus"
 
         if not match_reason and has_rootbuilder and ("root builder" in archive_name_lower or "rootbuilder" in archive_name_lower):
             match_reason = "matched installed MO2 plugin Root Builder"

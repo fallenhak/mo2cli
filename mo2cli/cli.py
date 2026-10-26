@@ -24,6 +24,7 @@ from .journal import history as journal_history
 from .journal import undo_last
 from .manifest import apply as apply_manifest
 from .metadata import sync_metadata
+from . import mo2plugins
 from .nexus import download_reference
 from .plugins import analyze as analyze_plugins
 from .plugins import ordered_entries as ordered_plugin_entries
@@ -297,6 +298,21 @@ def build_parser() -> argparse.ArgumentParser:
     download_fetch.add_argument("--sha256")
     download_fetch.add_argument("--header", action="append", metavar="'K: V'", help="Extra request header (repeatable); recorded as directURLHeaders")
     download_fetch.add_argument("--auto-download", "--auto", action="store_true", help="Automatically bypass 5s timer via browser for free accounts")
+
+    mo2plugin = sub.add_parser("mo2plugin", help="Install, list and remove MO2 plugins (Root Builder, FOMOD Plus, ...) in <base>/plugins")
+    _common(mo2plugin)
+    mps = mo2plugin.add_subparsers(dest="mo2plugin_command", required=True)
+    mp_install = mps.add_parser("install", help="Extract a plugin archive into the MO2 plugins folder (journaled, undoable)")
+    mp_install.add_argument("archive")
+    mp_install.add_argument("--name", help="Plugin name for list/remove (default: archive or plugin folder name)")
+    mp_install.add_argument("--source", help="Archive subfolder to treat as the archive root")
+    mp_install.add_argument("--replace", action="store_true", help="Reinstall; colliding files go to the trash")
+    mp_install.add_argument("--direct-url", help="Wabbajack directURL to record in the archive's .meta")
+    mp_install.add_argument("--dry-run", action="store_true")
+    mps.add_parser("list", help="List plugins installed by mo2cli")
+    mp_remove = mps.add_parser("remove", help="Move a managed plugin's files to the recoverable trash")
+    mp_remove.add_argument("name")
+    mp_remove.add_argument("--dry-run", action="store_true")
 
     manifest = sub.add_parser("manifest", help="Batch download, install, and arrange separators via manifest")
     _common(manifest)
@@ -798,6 +814,13 @@ def run(args: argparse.Namespace) -> int:
                 _output(download_reference(instance, args.url, args.nexus_api_key, args.game, args.file_name, args.output, args.replace, args.sha256, auto_download=getattr(args, "auto_download", False)), args.json)
             else:
                 _output(fetch_download(instance, args.url, args.output, args.replace, headers=_parse_headers(args.header), expected_sha256=args.sha256), args.json)
+    elif command == "mo2plugin":
+        if args.mo2plugin_command == "install":
+            _output(mo2plugins.install(instance, args.archive, args.name, args.source, args.replace, args.dry_run, args.direct_url), args.json)
+        elif args.mo2plugin_command == "list":
+            _output(mo2plugins.list_installed(instance), args.json)
+        else:
+            _output(mo2plugins.remove(instance, args.name, args.dry_run), args.json)
     elif command == "manifest":
         _output(apply_manifest(instance, args.path, args.profile, args.nexus_api_key, args.dry_run, args.replace, args.continue_on_error, auto_download=getattr(args, "auto_download", False)), args.json)
     return 0
@@ -831,6 +854,8 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
         if args.downloads_command == "meta":
             return not args.dry_run
         return args.downloads_command in {"sync", "mark-installed", "fetch"}
+    if command == "mo2plugin":
+        return args.mo2plugin_command in {"install", "remove"} and not args.dry_run
     if command == "manifest":
         return not args.dry_run
     if command == "vfs":

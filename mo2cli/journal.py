@@ -113,10 +113,60 @@ def _validate_postconditions(instance: Instance, details: dict[str, Any]) -> Non
             raise Mo2Error(f"State changed since the recorded operation; undo refused: {path}")
 
 
+def _restore_manifest(instance: Instance, details: dict[str, Any]) -> None:
+    before = details.get("manifest_before")
+    if not isinstance(before, dict) or not before.get("path"):
+        return
+    path = Path(str(before["path"]))
+    if path.resolve() != (instance.base / ".mo2cli" / "mo2plugins.json").resolve():
+        raise Mo2Error("Journal manifest target is outside the expected location; operation aborted.")
+    if before.get("exists"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(before.get("content", "")), encoding="utf-8", newline="")
+    elif path.exists():
+        path.unlink()
+
+
+def _undo_mo2plugin(instance: Instance, details: dict[str, Any]) -> None:
+    plugins = instance.base / "plugins"
+    trash_root = instance.base / ".mo2cli-trash"
+    backups = [item for item in details.get("backups", []) if isinstance(item, dict)]
+    for item in backups:
+        if not _path_inside(Path(str(item["path"])), plugins) or not _path_inside(Path(str(item["trash"])), trash_root):
+            raise Mo2Error("Journal plugin target is outside safe directories; operation aborted.")
+    installed = [Path(str(item)) for item in details.get("files", [])]
+    for path in installed:
+        if not _path_inside(path, plugins):
+            raise Mo2Error("Journal plugin file is outside the plugins directory; operation aborted.")
+    if details["operation"] == "mo2plugin_remove":
+        for item in backups:
+            if Path(str(item["path"])).exists():
+                raise Mo2Error(f"Plugin file already exists, not overwriting: {item['path']}")
+            if not Path(str(item["trash"])).is_file():
+                raise Mo2Error(f"Trash copy not found: {item['trash']}")
+    recovery = trash_root / f"undo-mo2plugin-{details.get('name', 'plugin')}-{dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
+    for path in installed:
+        if path.is_file():
+            relative = path.resolve().relative_to(plugins.resolve())
+            destination = recovery / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(destination))
+    for directory in reversed([Path(str(item)) for item in details.get("created_dirs", [])]):
+        if _path_inside(directory, plugins) and directory.is_dir() and not any(directory.iterdir()):
+            directory.rmdir()
+    for item in backups:
+        original, saved = Path(str(item["path"])), Path(str(item["trash"]))
+        if saved.is_file() and not original.exists():
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(saved), str(original))
+    _restore_manifest(instance, details)
+    _restore_state_files(instance, details)
+
+
 def undo_last(instance: Instance) -> dict[str, Any]:
     entries = _read(instance)
     undone = {str(entry.get("target")) for entry in entries if entry.get("operation") == "undo"}
-    target = next((entry for entry in reversed(entries) if entry.get("operation") in {"install", "remove", "rename", "separator_create", "separator_remove", "separator_group", "profile_delete"} and entry.get("reversible") and str(entry.get("id")) not in undone), None)
+    target = next((entry for entry in reversed(entries) if entry.get("operation") in {"install", "remove", "rename", "separator_create", "separator_remove", "separator_group", "profile_delete", "mo2plugin_install", "mo2plugin_remove"} and entry.get("reversible") and str(entry.get("id")) not in undone), None)
     if target is None:
         raise Mo2Error("No reversible operation found.")
 
@@ -197,6 +247,9 @@ def undo_last(instance: Instance) -> dict[str, Any]:
         previous_selected = target.get("previous_selected")
         if isinstance(previous_selected, str):
             instance.selected_profile = previous_selected
+
+    elif operation in {"mo2plugin_install", "mo2plugin_remove"}:
+        _undo_mo2plugin(instance, target)
 
     result = {"undone": target["operation"], "id": target["id"]}
     record(instance, "undo", reversible=False, target=target["id"], result=result)
