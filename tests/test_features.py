@@ -34,7 +34,7 @@ from mo2cli.separators import ensure as ensure_separator
 from mo2cli.separators import group as group_separator
 from mo2cli.separators import remove as remove_separator
 from mo2cli.tool_workflows import ensure_output_mod, run_bodyslide
-from mo2cli.tools import register_executable, remove_executable
+from mo2cli.tools import register_executable, remove_executable, run_executable, split_arguments
 from mo2cli.usvfs import status as usvfs_status
 from mo2cli.workspace import Instance, Mo2Error
 
@@ -709,6 +709,27 @@ class FeatureTests(unittest.TestCase):
         (self.root / "ModOrganizer.ini").write_text(rewritten)
         restored = next(item for item in self.instance.executables() if item["title"] == "Pandora")
         self.assertEqual(restored["arguments"], arguments)
+
+    def test_split_arguments_removes_quotes_and_keeps_windows_paths(self):
+        self.assertEqual(
+            split_arguments('--tesv "C:/Game Root" --output "C:\Pandora Output" x'),
+            ["--tesv", "C:/Game Root", "--output", "C:\Pandora Output", "x"],
+        )
+        self.assertEqual(split_arguments('a \\"b\\" ""'), ["a", '"b"', ""])
+        self.assertEqual(split_arguments("   "), [])
+
+    def test_run_executable_passes_quoted_arguments_as_single_tokens(self):
+        binary = self.root / "Pandora.exe"
+        binary.write_bytes(b"test")
+        arguments = '--tesv "C:/Game Root" --output "C:/Pandora Output"'
+        register_executable(self.instance, "Pandora", str(binary), arguments=arguments)
+        with patch("mo2cli.tools.subprocess.Popen") as popen:
+            popen.return_value.pid = 1
+            run_executable(self.instance, "Pandora", ["--extra"])
+        self.assertEqual(
+            popen.call_args.args[0],
+            [str(binary), "--tesv", "C:/Game Root", "--output", "C:/Pandora Output", "--extra"],
+        )
 
     def test_bodyslide_dry_run_builds_official_command_line(self):
         with patch(

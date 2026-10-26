@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import subprocess
 from pathlib import Path
 
@@ -106,11 +105,56 @@ def find_executable(instance: Instance, title: str) -> dict[str, object]:
     return match
 
 
+def split_arguments(text: str) -> list[str]:
+    """Split a command line the way CommandLineToArgvW does.
+
+    Double quotes group words and are removed; backslashes only escape when
+    they precede a double quote, so Windows paths survive untouched.
+    """
+    result: list[str] = []
+    current: list[str] = []
+    in_token = False
+    in_quotes = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            count = 0
+            while index < len(text) and text[index] == "\\":
+                count += 1
+                index += 1
+            if index < len(text) and text[index] == '"':
+                current.append("\\" * (count // 2))
+                if count % 2:
+                    current.append('"')
+                    index += 1
+                # an even count leaves the quote to toggle grouping below
+            else:
+                current.append("\\" * count)
+            in_token = True
+            continue
+        if char == '"':
+            in_quotes = not in_quotes
+            in_token = True
+        elif char.isspace() and not in_quotes:
+            if in_token:
+                result.append("".join(current))
+                current = []
+                in_token = False
+        else:
+            current.append(char)
+            in_token = True
+        index += 1
+    if in_token:
+        result.append("".join(current))
+    return result
+
+
 def run_executable(instance: Instance, title: str, extra_args: list[str] | None = None, wait: bool = False) -> dict[str, object]:
     executable = find_executable(instance, title)
     binary = str(executable["binary"])
     configured = str(executable.get("arguments", ""))
-    arguments = shlex.split(configured, posix=False) if configured else []
+    arguments = split_arguments(configured) if configured else []
     command = [binary, *arguments, *(extra_args or [])]
     cwd = str(executable.get("workingDirectory") or Path(binary).parent)
     environment = os.environ.copy()
