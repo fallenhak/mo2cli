@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import shutil
 import sys
 import tempfile
@@ -78,6 +79,12 @@ def _mark_download_installed(instance: Instance | None, archive: Path) -> None:
             document.write(meta_path)
         except OSError:
             pass
+
+
+def is_interactive() -> bool:
+    if os.environ.get("MO2CLI_NONINTERACTIVE", "").strip().casefold() in {"1", "true", "yes", "on"}:
+        return False
+    return sys.stdin.isatty()
 
 
 def _ask_reuse_fomod(saved: dict[str, Any], selections: dict[str, list[str]], changed: bool, dropped: list[str], context_changed: bool) -> bool:
@@ -257,7 +264,7 @@ def install_archive(
                     context_changed = saved.get("context") != current_context
                     changed = exact is None
                     reuse = fomod_reuse == "always" or dry_run
-                    if fomod_reuse == "auto" and not dry_run and sys.stdin.isatty():
+                    if fomod_reuse == "auto" and not dry_run and is_interactive():
                         reuse = _ask_reuse_fomod(saved, reconciled, changed, dropped, context_changed)
                     if reuse:
                         effective_selections = reconciled

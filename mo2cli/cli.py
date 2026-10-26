@@ -48,6 +48,7 @@ def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--instance", "-i", default=argparse.SUPPRESS, help="MO2 instance directory or ModOrganizer.ini")
     parser.add_argument("--profile", "-p", default=argparse.SUPPRESS, help="Target profile name")
     parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output as JSON")
+    parser.add_argument("--non-interactive", action="store_true", default=argparse.SUPPRESS, help="Never prompt (also MO2CLI_NONINTERACTIVE=1); FOMOD reuse 'auto' then behaves like a run without a terminal")
 
 
 def _output(value, as_json: bool) -> None:
@@ -877,6 +878,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     args.json = getattr(args, "json", False)
+    if getattr(args, "non_interactive", False):
+        os.environ["MO2CLI_NONINTERACTIVE"] = "1"
     try:
         if _mutates_instance(args):
             instance = Instance.open(getattr(args, "instance", None))
