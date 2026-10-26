@@ -44,7 +44,7 @@ class NexusFilesTests(unittest.TestCase):
         with patch("mo2cli.nexus.urllib.request.urlopen", side_effect=fake):
             files = NexusClient("KEY").files_all("skyrimspecialedition", 123)
         self.assertEqual(seen["url"], GRAPHQL_URL)
-        self.assertEqual(seen["body"]["variables"], {"modId": 123, "gameId": "1704"})
+        self.assertEqual(seen["body"]["variables"], {"modId": "123", "gameId": "1704"})
         self.assertIn("modFiles", seen["body"]["query"])
         self.assertEqual(seen["headers"]["apikey"], "KEY")
         self.assertTrue(seen["headers"]["user-agent"].startswith("mo2cli/"))

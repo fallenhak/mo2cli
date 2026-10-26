@@ -21,7 +21,7 @@ GRAPHQL_URL = "https://api.nexusmods.com/v2/graphql"
 GAME_IDS = {"skyrimspecialedition": 1704, "skyrim": 110, "fallout4": 1151}
 
 MOD_FILES_QUERY = (
-    "query ModFiles($modId: Int!, $gameId: ID!) { modFiles(modId: $modId, gameId: $gameId) "
+    "query ModFiles($modId: ID!, $gameId: ID!) { modFiles(modId: $modId, gameId: $gameId) "
     "{ fileId name version category date size uri } }"
 )
 APPLICATION_NAME = "mo2cli"
@@ -186,7 +186,7 @@ class NexusClient:
         resolved = game_id if game_id is not None else GAME_IDS.get(game)
         if resolved is None:
             raise Mo2Error(f"Nexus game id unknown for '{game}'; pass --game-id.")
-        data = self._graphql(MOD_FILES_QUERY, {"modId": int(mod_id), "gameId": str(resolved)})
+        data = self._graphql(MOD_FILES_QUERY, {"modId": str(int(mod_id)), "gameId": str(resolved)})
         items = (data or {}).get("modFiles") if isinstance(data, dict) else None
         if not isinstance(items, list):
             raise Mo2Error("Nexus GraphQL returned unexpected data for modFiles.")
