@@ -15,6 +15,15 @@ from .downloads import fetch, mo2_game_name, write_meta
 from .workspace import Instance, Mo2Error
 
 API_ROOT = "https://api.nexusmods.com/v1"
+GRAPHQL_URL = "https://api.nexusmods.com/v2/graphql"
+
+# Nexus numeric game ids as used by the v2 GraphQL API (override with --game-id).
+GAME_IDS = {"skyrimspecialedition": 1704, "skyrim": 110, "fallout4": 1151}
+
+MOD_FILES_QUERY = (
+    "query ModFiles($modId: Int!, $gameId: ID!) { modFiles(modId: $modId, gameId: $gameId) "
+    "{ fileId name version category date size uri } }"
+)
 APPLICATION_NAME = "mo2cli"
 
 GAME_DOMAINS = {
@@ -146,6 +155,56 @@ class NexusClient:
             raise Mo2Error(f"Nexus API HTTP {error.code}: {detail[:500]}") from error
         except (urllib.error.URLError, json.JSONDecodeError) as error:
             raise Mo2Error(f"Nexus API request failed: {error}") from error
+
+    def _graphql(self, query: str, variables: dict[str, Any]) -> Any:
+        if not self.api_key:
+            raise Mo2Error("Nexus API key required. Set NEXUS_API_KEY or specify --nexus-api-key.")
+        headers = {
+            "Application-Name": APPLICATION_NAME,
+            "Application-Version": self.application_version,
+            "User-Agent": f"{APPLICATION_NAME}/{self.application_version}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "apikey": self.api_key,
+        }
+        body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
+        request = urllib.request.Request(GRAPHQL_URL, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise Mo2Error(f"Nexus GraphQL HTTP {error.code}: {detail[:500]}") from error
+        except (urllib.error.URLError, json.JSONDecodeError) as error:
+            raise Mo2Error(f"Nexus GraphQL request failed: {error}") from error
+        if isinstance(payload, dict) and payload.get("errors"):
+            raise Mo2Error(f"Nexus GraphQL error: {json.dumps(payload['errors'])[:500]}")
+        return payload.get("data") if isinstance(payload, dict) else None
+
+    def files_all(self, game: str, mod_id: int, game_id: int | None = None) -> list[dict[str, Any]]:
+        """All files of a mod including archived and old ones (GraphQL v2), shaped like :meth:`files`."""
+        resolved = game_id if game_id is not None else GAME_IDS.get(game)
+        if resolved is None:
+            raise Mo2Error(f"Nexus game id unknown for '{game}'; pass --game-id.")
+        data = self._graphql(MOD_FILES_QUERY, {"modId": int(mod_id), "gameId": str(resolved)})
+        items = (data or {}).get("modFiles") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            raise Mo2Error("Nexus GraphQL returned unexpected data for modFiles.")
+        result = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            category = str(item.get("category") or "").upper()
+            result.append({
+                "file_id": item.get("fileId"),
+                "name": item.get("name"),
+                "version": item.get("version"),
+                "category_name": category,
+                "date": item.get("date"),
+                "size": item.get("size"),
+                "uri": item.get("uri"),
+            })
+        return result
 
     def files(self, game: str, mod_id: int) -> list[dict[str, Any]]:
         result = self._request(f"games/{urllib.parse.quote(game)}/mods/{mod_id}/files")
