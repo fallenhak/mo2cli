@@ -9,6 +9,10 @@ mo2cli treats an external modding tool as a reproducible workflow, not merely an
 - Pandora Behaviour Engine+ workflow with a dedicated output mod
 - BodySlide batch workflow with a dedicated output mod
 - `tools xedit-clean PLUGIN` (SSEEdit `-qac` in USVFS, log parsed for ITM/UDR counts), `tools loot-sort [--apply]` (lootcli to a temporary `--pluginListOutputPath`, JSON summary of messages, dirty plugins and missing masters) and `tools bsarch pack|unpack|list`; `--capture-to MOD` moves new files from `overwrite` into a mod (journaled, undoable)
+- `tools synthesis-run` (Synthesis.CLI `run-pipeline`) and `tools pandora-run` (Pandora `--tesv -o --auto_run --auto_close`) run in USVFS with their output written straight to `mods\<output mod>`; `--capture-to MOD` collects whatever still lands in `overwrite`
+- `wabbajack check` / `wabbajack compile` (pre-flight: downloads `.meta`, non-empty `overwrite`, untagged generated-output mods, Stock Game version; compile wraps `wabbajack-cli compile -i -o`)
+- `research collection SLUG` (Nexus GraphQL v2 `collectionRevision`) and `research lol SLUG` (Load Order Library public API)
+- `manifest export FILE` and the extra `manifest apply` sections (order, separator colors, MO2 plugins, settings, Stock Game version)
 - Tool archives for Wabbajack lists: `archive extract`, `downloads meta` / `downloads audit`, and `mo2plugin install` keep the archive in `downloads\` with a `.meta` that carries a Wabbajack source (see the README section "Wabbajack-ready setup")
 
 ## Planned workflows

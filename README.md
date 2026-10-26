@@ -227,6 +227,22 @@ mo2 --instance "C:\Modlists\MyList" tools loot-sort                  # report on
 mo2 --instance "C:\Modlists\MyList" tools loot-sort --apply          # writes loadorder.txt and plugins.txt, undoable
 mo2 --instance "C:\Modlists\MyList" tools bsarch pack "C:\Temp\src" "C:\Modlists\MyList\mods\X\X.bsa" --filter "*.nif"
 mo2 --instance "C:\Modlists\MyList" tools bsarch list "X.bsa" --exe "C:\Tools\BSArch.exe"
+
+# Generators run in USVFS; output goes to the real mods\<output mod> folder, --capture-to also collects stray overwrite files
+mo2 --instance "C:\Modlists\MyList" tools synthesis-run --settings "C:\Modlists\MyList\Tools\Synthesis\PipelineSettings.json" --profile-id Main --target-runtime net8.0 --dry-run
+mo2 --instance "C:\Modlists\MyList" tools pandora-run --output-mod "Pandora Output" --capture-to "Pandora Extras"
+
+# Wabbajack: pre-flight report and compile (needs wabbajack-cli.exe, registered or --exe)
+mo2 --instance "C:\Modlists\MyList" --json wabbajack check --settings "C:\Modlists\MyList\MyList.compiler_settings" --expect-version 1.6.1170.0
+mo2 --instance "C:\Modlists\MyList" wabbajack compile --output "C:\Out\MyList.wabbajack" --settings "C:\Modlists\MyList\MyList.compiler_settings"
+
+# Public list research (read-only; Nexus needs an API key, Load Order Library does not)
+mo2 --json research collection bsyabf --revision 2
+mo2 --json research lol lorerim --save-to "C:\Temp\lorerim"
+
+# Reproducible manifest of the instance, and applying it again
+mo2 --instance "C:\Modlists\MyList" manifest export "C:\Modlists\MyList\manifest.json"
+mo2 --instance "C:\Modlists\MyList" manifest apply "C:\Modlists\MyList\manifest.json" --dry-run
 ```
 
 Notes:
@@ -234,6 +250,9 @@ Notes:
 - `stockgame create` never writes to `--from`; skipped files are listed in the result. `--to` defaults to `<instance>\Stock Game`; undo moves a freshly created folder to `.mo2cli-trash`.
 - `--capture-to MOD` moves files that appeared (or changed) in `overwrite` during the run into that mod (created and enabled when missing); `undo` moves them back.
 - `xedit-clean` runs SSEEdit inside USVFS with `-SSE -qac -autoexit -autoload -IKnowWhatImDoing -D -P -I -R`, backs the plugin up to `.mo2cli-trash` first and refuses vanilla and Creation Club plugins without `--force`. `loot-sort` always passes a separate `--pluginListOutputPath`.
+- `synthesis-run` passes `run-pipeline -o -s [-p] -d -l [-e] [-t]` (defaults: `-d` game Data, `-l` the profile's plugins.txt). `pandora-run` passes `--tesv <game root> -o <mod> --auto_run --auto_close`; `--auto_run` needs one earlier GUI run that wrote `Pandora_Engine\ActiveMods.json`, otherwise a warning is returned.
+- `wabbajack check` reports downloads without a usable `.meta`, files in `overwrite` (Wabbajack ignores it), enabled generated-output mods (names such as "... Output", Pandora, Synthesis, DynDOLOD) that are neither tagged `WABBAJACK_NOMATCH_INCLUDE` in their notes nor listed in the settings file's `NoMatchInclude`, and the Stock Game `SkyrimSE.exe` version. `wabbajack compile` runs the same check first and stops unless `--force`; `-o` is passed as a folder and the new file is renamed to the requested `.wabbajack` name.
+- `manifest export` writes mods (Nexus ids, directURL or manualURL from `meta.ini`, `if_missing`, `source_missing` when nothing can be downloaded), separators with colors, the exact `modlist.txt` order and enabled state (`order`), MO2 plugins, `ModOrganizer.ini` sections (`Settings`, `PluginPersistance`, `Plugins` by default) and the Stock Game version. `manifest apply` accepts these sections: `if_missing` mods that are already installed and `source_missing` mods are skipped, separator colors, order and settings are applied last (journaled, undoable), MO2 plugins are installed from `downloads\` when present, and the Stock Game version is only checked.
 
 ## Manifest Format
 
