@@ -35,7 +35,7 @@ from mo2cli.separators import group as group_separator
 from mo2cli.separators import remove as remove_separator
 from mo2cli.tool_workflows import ensure_output_mod, move_overwrite, run_bodyslide
 from mo2cli.tools import register_executable, remove_executable, run_executable, split_arguments
-from mo2cli.usvfs import profile_file_links, resolve_working_directory, status as usvfs_status
+from mo2cli.usvfs import profile_file_links, rescue_staging_writes, resolve_working_directory, snapshot_files, status as usvfs_status
 from mo2cli.workspace import Instance, Mo2Error
 
 
@@ -668,6 +668,24 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(links[profile / "loadorder.txt"], target / "loadorder.txt")
         self.instance.game_name = "Fallout 4"
         self.assertEqual(profile_file_links(self.instance, "Default", str(appdata)), [])
+
+    def test_usvfs_staging_writes_are_moved_to_overwrite(self):
+        staging = self.root / "staging"
+        (staging / "Sub").mkdir(parents=True)
+        (staging / "patch.esp").write_bytes(b"old")
+        (staging / "Sub" / "same.txt").write_bytes(b"same")
+        before = snapshot_files(staging)
+        (staging / "patch.esp").unlink()
+        (staging / "patch.esp").write_bytes(b"new patch")
+        (staging / "Sub" / "created.log").write_bytes(b"log")
+        overwrite = self.root / "overwrite"
+        (overwrite).mkdir(exist_ok=True)
+        (overwrite / "patch.esp").write_bytes(b"stale")
+        moved = rescue_staging_writes(staging, before, overwrite)
+        self.assertEqual(sorted(moved), ["Sub/created.log", "patch.esp"])
+        self.assertEqual((overwrite / "patch.esp").read_bytes(), b"new patch")
+        self.assertEqual((overwrite / "Sub" / "created.log").read_bytes(), b"log")
+        self.assertFalse((overwrite / "Sub" / "same.txt").exists())
 
     def test_move_overwrite_into_new_mod_and_refuse_clashes(self):
         overwrite = self.instance.overwrite_dir

@@ -16,6 +16,34 @@ LINKFLAG_RECURSIVE = 0x8
 INFINITE = 0xFFFFFFFF
 
 
+def snapshot_files(root: Path) -> dict[str, tuple[int, int]]:
+    """Relative path -> (size, mtime_ns) for every file below ``root``."""
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in root.rglob("*"):
+        if path.is_file():
+            stat = path.stat()
+            snapshot[path.relative_to(root).as_posix()] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+def rescue_staging_writes(staging: Path, before: dict[str, tuple[int, int]], overwrite: Path) -> list[str]:
+    """Move files the tool created or rewrote inside the staging copy into overwrite.
+
+    Writes to a file that already exists in the virtual Data folder go to its staging copy,
+    which is deleted after the run; without this, tool output that replaces an earlier one is lost."""
+    moved: list[str] = []
+    for relative, state in snapshot_files(staging).items():
+        if before.get(relative) == state:
+            continue
+        target = overwrite.joinpath(*relative.split("/"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.unlink()
+        shutil.move(str(staging.joinpath(*relative.split("/"))), str(target))
+        moved.append(relative)
+    return moved
+
+
 def _disconnect_vfs(dll, timeout: float = 5.0) -> bool:
     """Disconnect USVFS without allowing a native shutdown deadlock to hang the CLI."""
     finished = threading.Event()
@@ -146,6 +174,7 @@ def run(
         staging = instance.base / ".mo2cli-vfs" / uuid.uuid4().hex
         staging.mkdir(parents=True, exist_ok=False)
         instance.materialize(profile, staging, include_prefixes=include_prefixes)
+    staging_before = snapshot_files(staging) if staging is not None else {}
     # New files must land in overwrite like under MO2, never in the real game folder.
     instance.overwrite_dir.mkdir(parents=True, exist_ok=True)
     sources = instance.active_mod_roots(profile) if direct_mods else [staging]
@@ -216,6 +245,9 @@ def run(
         if cookie:
             cookie.close()
         if wait and staging is not None and staging.exists():
+            moved = rescue_staging_writes(staging, staging_before, instance.overwrite_dir)
+            if moved and result is not None:
+                result["moved_to_overwrite"] = moved
             shutil.rmtree(staging, ignore_errors=True)
             if staging.exists() and result is not None:
                 result["cleanup_warning"] = "USVFS staging directory remained locked; can be cleaned up with vfs cleanup --yes."
