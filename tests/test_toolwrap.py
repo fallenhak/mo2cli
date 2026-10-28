@@ -200,6 +200,7 @@ class ToolWrapTests(unittest.TestCase):
             data = Path(next(item for item in arguments if item.startswith("-D:"))[3:])
             seen["data"] = sorted(path.name for path in data.iterdir())
             seen["plugins"] = Path(next(item for item in arguments if item.startswith("-P:"))[3:]).read_text(encoding="utf-8").split()
+            seen["settings"] = (data.parent / "plugins.sseviewsettings").read_text(encoding="utf-8")
             # xEdit saves a new file and renames the original into a backup folder
             (data / "SSEEdit Backups").mkdir()
             (data / "A.esp").rename(data / "SSEEdit Backups" / "A.esp.backup")
@@ -212,6 +213,8 @@ class ToolWrapTests(unittest.TestCase):
                 result = toolwrap.xedit_clean(self.instance, None, "A.esp", exe=str(self.exe), log_dir=str(self.root / "logs"))
         self.assertEqual(seen["data"], ["A.esp", "Skyrim.esm"])
         self.assertEqual(seen["plugins"], ["*Skyrim.esm", "*A.esp"])
+        self.assertIn("ShowTip=0", seen["settings"])
+        self.assertIn("[DeveloperMessage]", seen["settings"])
         self.assertTrue(result["ok"])
         self.assertTrue(result["cleaned"])
         self.assertEqual(result["itm"], 1)
