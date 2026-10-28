@@ -35,7 +35,7 @@ from mo2cli.separators import group as group_separator
 from mo2cli.separators import remove as remove_separator
 from mo2cli.tool_workflows import ensure_output_mod, run_bodyslide
 from mo2cli.tools import register_executable, remove_executable, run_executable, split_arguments
-from mo2cli.usvfs import status as usvfs_status
+from mo2cli.usvfs import resolve_working_directory, status as usvfs_status
 from mo2cli.workspace import Instance, Mo2Error
 
 
@@ -646,6 +646,16 @@ class FeatureTests(unittest.TestCase):
     def test_usvfs_status_is_safe_when_runtime_is_absent(self):
         report = usvfs_status(self.instance)
         self.assertFalse(report["available"])
+
+    def test_usvfs_working_directory_defaults_to_binary_and_accepts_data(self):
+        exe = self.root / "Tools" / "app.exe"
+        data = self.root / "Data"
+        data.mkdir(exist_ok=True)
+        self.assertEqual(resolve_working_directory(None, exe, data), exe.parent)
+        self.assertEqual(resolve_working_directory("data", exe, data), data)
+        self.assertEqual(resolve_working_directory(str(data), exe, data), data)
+        with self.assertRaises(Mo2Error):
+            resolve_working_directory(str(self.root / "missing"), exe, data)
 
     def test_tool_output_mod_is_registered_and_grouped(self):
         output = ensure_output_mod(self.instance, "Default", "BodySlide Output", "Tool Outputs")

@@ -77,6 +77,17 @@ def cleanup(instance: Instance, yes: bool = False) -> dict[str, object]:
     return {"removed": str(staging_root)}
 
 
+def resolve_working_directory(working_directory: str | None, executable: Path, destination: Path) -> Path:
+    if not working_directory:
+        return executable.parent
+    if working_directory.lower() == "data":
+        return destination
+    path = Path(working_directory).expanduser()
+    if not path.is_dir():
+        raise Mo2Error(f"Working directory not found: {path}")
+    return path
+
+
 def run(
     instance: Instance,
     profile: str | None,
@@ -87,7 +98,10 @@ def run(
     wait: bool = True,
     include_prefixes: tuple[str, ...] | None = None,
     direct_mods: bool = False,
+    working_directory: str | None = None,
 ) -> dict[str, object]:
+    """``working_directory`` defaults to the binary's folder; ``"data"`` means the virtual destination
+    (tools such as Reqtificator look for Skyrim.esm in their working directory)."""
     if os.name != "nt":
         raise Mo2Error("Real USVFS execution is only supported on Windows.")
     dll_path, dll_dir = _runtime(instance, usvfs_dir)
@@ -99,6 +113,7 @@ def run(
     game_destination = Path(destination).expanduser() if destination else ((instance.game_path / "Data") if instance.game_path and (instance.game_path / "Data").is_dir() else instance.game_path)
     if game_destination is None or not game_destination.is_dir():
         raise Mo2Error("VFS destination directory not found; specify --destination.")
+    cwd = resolve_working_directory(working_directory, executable, game_destination)
     staging: Path | None = None
     if not direct_mods:
         staging = instance.base / ".mo2cli-vfs" / uuid.uuid4().hex
@@ -146,7 +161,7 @@ def run(
         create_process = dll.usvfsCreateProcessHooked
         create_process.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.POINTER(STARTUPINFO), ctypes.POINTER(PROCESS_INFORMATION)]
         create_process.restype = ctypes.c_bool
-        if not create_process(str(executable), mutable_command, None, None, False, 0, None, str(executable.parent), ctypes.byref(startup), ctypes.byref(process)):
+        if not create_process(str(executable), mutable_command, None, None, False, 0, None, str(cwd), ctypes.byref(startup), ctypes.byref(process)):
             raise Mo2Error(f"USVFS failed to start process: {ctypes.get_last_error()}")
         result = {"binary": str(executable), "pid": int(process.dwProcessId), "staging": str(staging) if staging else None, "mapped_sources": [str(source) for source in sources if source is not None] if direct_mods else None, "destination": str(game_destination), "virtualization": "usvfs", "waited": wait}
         if wait:

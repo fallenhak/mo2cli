@@ -502,6 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
     vfs_run_command.add_argument("extra", nargs="*")
     vfs_run_command.add_argument("--usvfs-dir")
     vfs_run_command.add_argument("--destination")
+    vfs_run_command.add_argument("--cwd", help="Working directory; 'data' = the virtual Data folder (default: the binary's folder)")
 
     instances = sub.add_parser("instances", help="List global MO2 instances on Windows")
     _common(instances)
@@ -767,7 +768,7 @@ def run(args: argparse.Namespace) -> int:
         elif args.vfs_command == "cleanup":
             _output(cleanup_vfs(instance, args.yes), args.json)
         else:
-            _output(run_vfs(instance, args.profile, args.binary, args.extra, args.usvfs_dir, args.destination), args.json)
+            _output(run_vfs(instance, args.profile, args.binary, args.extra, args.usvfs_dir, args.destination, working_directory=args.cwd), args.json)
     elif command == "info":
         _output({"instance": str(instance.root), "ini": str(instance.ini), "game": instance.game_name,
                  "game_path": str(instance.game_path) if instance.game_path else None,
