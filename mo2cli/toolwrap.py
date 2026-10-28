@@ -284,6 +284,9 @@ def _xedit_clean_isolated(
         shutil.copy2(source, target)
         plugins_txt = root / "plugins.txt"
         plugins_txt.write_text("".join(f"*{path.name}\n" for path in [*masters, target]), encoding="utf-8")
+        # Without SSEEdit.ini next to the exe, xEdit keeps settings beside -P (here: a fresh folder),
+        # so the modal "Tip of the Day" would block every run until someone closes it.
+        (root / "plugins.sseviewsettings").write_text("[Options]\nShowTip=0\n", encoding="utf-8")
         arguments = ["-SSE", "-qac", "-autoexit", "-autoload", "-IKnowWhatImDoing", f"-D:{data}", f"-P:{plugins_txt}", f"-R:{log_file}", source.name]
         result["arguments"] = arguments
         completed = subprocess.run([str(binary), *arguments], cwd=str(binary.parent))
