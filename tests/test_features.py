@@ -726,6 +726,25 @@ class FeatureTests(unittest.TestCase):
         registered = next(item for item in self.instance.executables() if item["title"] == "BodySlide")
         self.assertEqual(Path(str(registered["binary"])), replacement)
 
+    def test_executables_keep_qsettings_array_size_and_no_gaps(self):
+        self.instance.ini.write_text(
+            "[General]\r\ngameName=Skyrim Special Edition\r\n\r\n[customExecutables]\r\nsize=1\r\n"
+            "1\\title=Game\r\n1\\binary=C:/Game/SkyrimSE.exe\r\n\r\n[Settings]\r\nlanguage=en\r\n",
+            encoding="utf-8",
+            newline="",
+        )
+        for name in ("A", "B", "C"):
+            (self.root / f"{name}.exe").write_bytes(b"test")
+            register_executable(self.instance, name, str(self.root / f"{name}.exe"))
+        remove_executable(self.instance, "B")
+        text = self.instance.ini.read_text(encoding="utf-8", newline="")
+        self.assertIn("size=3", text)
+        self.assertEqual(text.count("size="), 1)
+        self.assertEqual([(item["index"], item["title"]) for item in self.instance.executables()], [(1, "Game"), (2, "A"), (3, "C")])
+        self.assertIn("[Settings]\r\nlanguage=en", text)
+        replaced = register_executable(self.instance, "A", str(self.root / "C.exe"), replace=True)
+        self.assertEqual(replaced["index"], 2)
+
     def test_register_executable_allow_missing_binary(self):
         binary = self.root / "Stock Game" / "skse64_loader.exe"
         with self.assertRaises(Mo2Error):

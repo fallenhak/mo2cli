@@ -1,11 +1,36 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
 from .metadata import IniDocument
 from .workspace import Instance, Mo2Error
+
+
+def _compact_executables(document: IniDocument) -> int:
+    """Renumber ``[customExecutables]`` entries 1..n and write ``size=n``.
+
+    MO2 reads the section as a QSettings array: only indexes 1..size are loaded, so an entry
+    past ``size`` or after a gap is silently dropped."""
+    start, end = document._section_bounds("customExecutables")
+    if start < 0:
+        return 0
+    grouped: dict[int, list[str]] = {}
+    others: list[str] = []
+    for line in document.lines[start:end]:
+        match = re.match(r"^\s*(\d+)\\([^=]+?)\s*=(.*)$", line)
+        if match:
+            grouped.setdefault(int(match.group(1)), []).append(f"{match.group(2)}={match.group(3)}")
+        elif line.strip() and not re.match(r"^\s*size\s*=", line, re.IGNORECASE):
+            others.append(line)
+    rebuilt = [f"size={len(grouped)}"]
+    for number, index in enumerate(sorted(grouped), 1):
+        rebuilt.extend(f"{number}\\{field}" for field in grouped[index])
+    trailing = [""] if end < len(document.lines) else []
+    document.lines[start:end] = rebuilt + others + trailing
+    return len(grouped)
 
 
 def register_executable(
@@ -61,7 +86,10 @@ def register_executable(
         if field == "arguments" and value:
             rendered = '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
         document.set(f"{index}\\{field}", rendered, section="customExecutables")
+    _compact_executables(document)
     document.write(instance.ini)
+    # Compaction keeps the order, so the entry's new index is its rank among the old ones.
+    index = sorted(set(indexes) | {index}).index(index) + 1
     return fields | {"index": index, "replaced": existing is not None, "binary_exists": binary_path.is_file()}
 
 
@@ -90,6 +118,7 @@ def remove_executable(instance: Instance, target: str) -> dict[str, object]:
     keys = [key for key in values if key.partition("\\")[0] == str(index)]
     for key in keys:
         document.remove(key, section="customExecutables")
+    _compact_executables(document)
     document.write(instance.ini)
     return {"index": index, "title": executable.get("title", ""), "removed_fields": len(keys)}
 
