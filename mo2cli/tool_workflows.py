@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from .formats import ModList, write_text
@@ -58,6 +59,47 @@ def ensure_output_mod(instance: Instance, profile: str | None, name: str, separa
         ensure_separator(instance, profile_name, separator)
         group_separator(instance, profile_name, separator, [name])
     return path
+
+
+def move_overwrite(
+    instance: Instance,
+    profile: str | None,
+    name: str,
+    paths: list[str] | None = None,
+    separator: str | None = None,
+    replace: bool = False,
+) -> dict[str, object]:
+    """MO2's "Create mod from overwrite": move overwrite entries (all, or the given relative
+    paths) into mod ``name``, creating and enabling it like a tool output mod."""
+    overwrite = instance.overwrite_dir
+    if paths:
+        sources = []
+        for raw in paths:
+            source = (overwrite / raw).resolve()
+            if not source.is_relative_to(overwrite.resolve()) or source == overwrite.resolve():
+                raise Mo2Error(f"Path escapes overwrite: {raw}")
+            if not source.exists():
+                raise Mo2Error(f"Not found in overwrite: {raw}")
+            sources.append(source)
+    else:
+        sources = sorted(overwrite.iterdir()) if overwrite.is_dir() else []
+    if not sources:
+        raise Mo2Error("Overwrite is empty; nothing to move.")
+    files = [(file, file.relative_to(overwrite.resolve() if paths else overwrite)) for source in sources for file in ([source] if source.is_file() else sorted(p for p in source.rglob("*") if p.is_file()))]
+    target = ensure_output_mod(instance, profile, name, separator)
+    clashes = [str(relative) for _, relative in files if (target / relative).exists()]
+    if clashes and not replace:
+        raise Mo2Error(f"Mod already has these files (use --replace): {', '.join(clashes)}")
+    for file, relative in files:
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(file), str(destination))
+    for source in sources:
+        if source.is_dir():
+            for directory in sorted((p for p in [source, *source.rglob("*")] if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+                if not any(directory.iterdir()):
+                    directory.rmdir()
+    return {"mod": name, "path": str(target), "moved": [str(relative) for _, relative in files], "replaced": clashes}
 
 
 def _destination(instance: Instance, destination: str | None) -> str | None:

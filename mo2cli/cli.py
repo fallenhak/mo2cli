@@ -39,7 +39,7 @@ from .separators import ensure as ensure_separator
 from .separators import group as group_separator
 from .separators import list_separators
 from .separators import remove as remove_separator
-from .tool_workflows import run_bodyslide, run_pandora
+from .tool_workflows import move_overwrite, run_bodyslide, run_pandora
 from .tools import register_executable, remove_executable, run_executable
 from .usvfs import cleanup as cleanup_vfs
 from .usvfs import run as run_vfs
@@ -138,6 +138,11 @@ def build_parser() -> argparse.ArgumentParser:
     remove.add_argument("name")
     remove.add_argument("--yes", action="store_true")
     remove.add_argument("--purge", action="store_true", help="Permanently delete instead of moving to trash")
+    from_overwrite = ms.add_parser("from-overwrite", help="Move overwrite contents into a mod (created and enabled if missing)")
+    from_overwrite.add_argument("name")
+    from_overwrite.add_argument("paths", nargs="*", help="Relative paths inside overwrite (default: everything)")
+    from_overwrite.add_argument("--separator", help="Group the mod under this separator")
+    from_overwrite.add_argument("--replace", action="store_true", help="Replace files the mod already has")
     rename = ms.add_parser("rename", help="Rename mod across all profiles")
     rename.add_argument("old")
     rename.add_argument("new")
@@ -867,6 +872,8 @@ def run(args: argparse.Namespace) -> int:
         elif command == "mods" and args.mods_command == "remove":
             result = remove_mod(instance, args.name, args.purge, args.yes)
             _output(result, args.json)
+        elif command == "mods" and args.mods_command == "from-overwrite":
+            _output(move_overwrite(instance, args.profile, args.name, args.paths, args.separator, args.replace), args.json)
         elif command == "mods" and args.mods_command == "rename":
             result = rename_mod(instance, args.old, args.new)
             _output(result, args.json)
@@ -1064,7 +1071,7 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
             return not args.dry_run
         if args.mods_command == "metadata":
             return bool(args.updates or args.sync)
-        return args.mods_command in {"remove", "rename", "enable", "disable", "move", "separator"} and not (
+        return args.mods_command in {"remove", "rename", "enable", "disable", "move", "separator", "from-overwrite"} and not (
             args.mods_command == "separator" and args.separator_command == "list"
         )
     if command == "plugins":

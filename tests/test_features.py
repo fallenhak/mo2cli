@@ -33,7 +33,7 @@ from mo2cli.separators import create as create_separator
 from mo2cli.separators import ensure as ensure_separator
 from mo2cli.separators import group as group_separator
 from mo2cli.separators import remove as remove_separator
-from mo2cli.tool_workflows import ensure_output_mod, run_bodyslide
+from mo2cli.tool_workflows import ensure_output_mod, move_overwrite, run_bodyslide
 from mo2cli.tools import register_executable, remove_executable, run_executable, split_arguments
 from mo2cli.usvfs import profile_file_links, resolve_working_directory, status as usvfs_status
 from mo2cli.workspace import Instance, Mo2Error
@@ -668,6 +668,28 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(links[profile / "loadorder.txt"], target / "loadorder.txt")
         self.instance.game_name = "Fallout 4"
         self.assertEqual(profile_file_links(self.instance, "Default", str(appdata)), [])
+
+    def test_move_overwrite_into_new_mod_and_refuse_clashes(self):
+        overwrite = self.instance.overwrite_dir
+        (overwrite / "Tool").mkdir(parents=True, exist_ok=True)
+        (overwrite / "Tool" / "settings.json").write_text("{}", encoding="utf-8")
+        (overwrite / "Patch.esp").write_bytes(b"TES4")
+        (overwrite / "tool.log").write_text("log", encoding="utf-8")
+        result = move_overwrite(self.instance, "Default", "Tool Output", ["Patch.esp", "Tool"])
+        target = self.root / "mods" / "Tool Output"
+        self.assertEqual(sorted(result["moved"]), ["Patch.esp", str(Path("Tool") / "settings.json")])
+        self.assertTrue((target / "Patch.esp").is_file())
+        self.assertTrue((target / "Tool" / "settings.json").is_file())
+        self.assertFalse((overwrite / "Tool").exists())
+        self.assertTrue((overwrite / "tool.log").exists())
+        self.assertTrue(ModList.read(self.root / "profiles" / "Default" / "modlist.txt").find("Tool Output").enabled)
+        (overwrite / "Patch.esp").write_bytes(b"TES4 v2")
+        with self.assertRaises(Mo2Error):
+            move_overwrite(self.instance, "Default", "Tool Output", ["Patch.esp"])
+        move_overwrite(self.instance, "Default", "Tool Output", ["Patch.esp"], replace=True)
+        self.assertEqual((target / "Patch.esp").read_bytes(), b"TES4 v2")
+        with self.assertRaises(Mo2Error):
+            move_overwrite(self.instance, "Default", "Tool Output", ["../mods"])
 
     def test_tool_output_mod_is_registered_and_grouped(self):
         output = ensure_output_mod(self.instance, "Default", "BodySlide Output", "Tool Outputs")
