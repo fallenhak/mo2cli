@@ -364,6 +364,50 @@ def summarize_loot_report(report: dict[str, object]) -> dict[str, object]:
     return {"messages": messages, "plugin_messages": plugin_messages, "dirty": dirty, "missing_masters": missing}
 
 
+LOAD_RULES_FILE = "mo2cli-load-rules.txt"
+
+
+def read_load_rules(path: Path) -> list[tuple[str, str]]:
+    """``PLUGIN after OTHER`` lines (``#`` comments) from a profile's load rules file.
+
+    LOOT keeps its userlist under the user's own %LOCALAPPDATA%/LOOT, shared by every game install,
+    so per-modlist ordering lives in the profile instead and travels with it (Wabbajack included)."""
+    rules: list[tuple[str, str]] = []
+    if not path.is_file():
+        return rules
+    for number, raw in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        plugin, separator, other = line.partition(" after ")
+        if not separator or not plugin.strip() or not other.strip():
+            raise Mo2Error(f"{path.name}:{number}: expected 'PLUGIN after OTHER': {raw!r}")
+        rules.append((plugin.strip(), other.strip()))
+    return rules
+
+
+def apply_load_rules(order: list[str], rules: list[tuple[str, str]], masters: dict[str, list[str]]) -> tuple[list[str], list[str]]:
+    """Move each rule's plugin directly after its target when LOOT put it earlier.
+
+    Refuses a move that would push a plugin after one of its dependents."""
+    result = list(order)
+    applied: list[str] = []
+    for plugin, other in rules:
+        keys = [name.casefold() for name in result]
+        if plugin.casefold() not in keys or other.casefold() not in keys:
+            continue
+        source, target = keys.index(plugin.casefold()), keys.index(other.casefold())
+        if source > target:
+            continue
+        dependents = [name for name in result[source + 1:target + 1] if plugin.casefold() in masters.get(name.casefold(), [])]
+        if dependents:
+            raise Mo2Error(f"Load rule '{plugin} after {other}' would load it after its dependents: {', '.join(dependents)}")
+        name = result.pop(source)
+        result.insert(target, name)
+        applied.append(f"{plugin} after {other}")
+    return result, applied
+
+
 def loot_sort(
     instance: Instance,
     profile: str | None,
@@ -423,6 +467,10 @@ def loot_sort(
             raise Mo2Error("LOOT wrote neither a sorted load order nor a report; load order untouched.")
         result["sorted_from"] = sorted_path.name
         sorted_names = [entry.name for entry in PluginList.read(sorted_path).entries]
+        rules = read_load_rules(profile_path / LOAD_RULES_FILE)
+        if rules:
+            masters = {path.name.casefold(): [master.casefold() for master in parse_header(path).masters] for path in files.values()}
+            sorted_names, result["load_rules"] = apply_load_rules(sorted_names, rules, masters)
         current = [entry.name for entry in PluginList.read(loadorder).entries]
         if {name.casefold() for name in sorted_names} != {name.casefold() for name in current}:
             missing = sorted({n.casefold() for n in current} - {n.casefold() for n in sorted_names})

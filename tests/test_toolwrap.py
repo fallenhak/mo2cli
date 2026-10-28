@@ -93,6 +93,24 @@ class ToolWrapTests(unittest.TestCase):
         self.assertEqual(self.loadorder(), ["Skyrim.esm", "A.esp", "B.esp"])
         self.assertEqual((self.root / "profiles" / "Default" / "plugins.txt").read_text(encoding="utf-8").split(), ["*A.esp", "*B.esp"])
 
+    def test_loot_sort_applies_profile_load_rules_after_loot(self):
+        (self.root / "profiles" / "Default" / toolwrap.LOAD_RULES_FILE).write_text("# keep A last\nA.esp after B.esp\n", encoding="utf-8")
+        with patch("mo2cli.toolwrap.subprocess.run", side_effect=self.fake_loot(["Skyrim.esm", "A.esp", "B.esp"])):
+            result = toolwrap.loot_sort(self.instance, None, exe=str(self.exe), apply=True)
+        self.assertEqual(result["load_rules"], ["A.esp after B.esp"])
+        self.assertEqual(self.loadorder(), ["Skyrim.esm", "B.esp", "A.esp"])
+
+    def test_load_rules_refuse_moving_past_dependents_and_bad_lines(self):
+        order = ["Skyrim.esm", "A.esp", "B.esp", "C.esp"]
+        self.assertEqual(toolwrap.apply_load_rules(order, [("A.esp", "C.esp")], {})[0], ["Skyrim.esm", "B.esp", "C.esp", "A.esp"])
+        self.assertEqual(toolwrap.apply_load_rules(order, [("C.esp", "A.esp"), ("X.esp", "A.esp")], {}), (order, []))
+        with self.assertRaises(Mo2Error):
+            toolwrap.apply_load_rules(order, [("A.esp", "C.esp")], {"b.esp": ["a.esp"]})
+        rules = self.root / "rules.txt"
+        rules.write_text("A.esp before B.esp\n", encoding="utf-8")
+        with self.assertRaises(Mo2Error):
+            toolwrap.read_load_rules(rules)
+
     def test_loot_sort_rejects_changed_plugin_set_and_failures(self):
         with patch("mo2cli.toolwrap.subprocess.run", side_effect=self.fake_loot(["Skyrim.esm", "A.esp"])):
             with self.assertRaises(Mo2Error):
