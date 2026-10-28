@@ -35,7 +35,7 @@ from mo2cli.separators import group as group_separator
 from mo2cli.separators import remove as remove_separator
 from mo2cli.tool_workflows import ensure_output_mod, run_bodyslide
 from mo2cli.tools import register_executable, remove_executable, run_executable, split_arguments
-from mo2cli.usvfs import resolve_working_directory, status as usvfs_status
+from mo2cli.usvfs import profile_file_links, resolve_working_directory, status as usvfs_status
 from mo2cli.workspace import Instance, Mo2Error
 
 
@@ -656,6 +656,18 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(resolve_working_directory(str(data), exe, data), data)
         with self.assertRaises(Mo2Error):
             resolve_working_directory(str(self.root / "missing"), exe, data)
+
+    def test_usvfs_links_profile_load_order_over_local_appdata(self):
+        profile = self.instance.profile_path("Default")
+        (profile / "loadorder.txt").write_text("Skyrim.esm\n", encoding="utf-8")
+        appdata = self.root / "LocalAppData"
+        self.instance.game_name = "Skyrim Special Edition"
+        links = dict(profile_file_links(self.instance, "Default", str(appdata)))
+        target = appdata / "Skyrim Special Edition"
+        self.assertEqual(links[profile / "plugins.txt"], target / "plugins.txt")
+        self.assertEqual(links[profile / "loadorder.txt"], target / "loadorder.txt")
+        self.instance.game_name = "Fallout 4"
+        self.assertEqual(profile_file_links(self.instance, "Default", str(appdata)), [])
 
     def test_tool_output_mod_is_registered_and_grouped(self):
         output = ensure_output_mod(self.instance, "Default", "BodySlide Output", "Tool Outputs")

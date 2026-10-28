@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import ctypes
 import os
 import shutil
@@ -88,6 +89,32 @@ def resolve_working_directory(working_directory: str | None, executable: Path, d
     return path
 
 
+# MO2's per-edition folder under %LOCALAPPDATA% (modorganizer-game_skyrimse: gameDirectoryName()).
+_LOCAL_APPDATA_DIRECTORIES = {
+    "Steam": "Skyrim Special Edition",
+    "GOG": "Skyrim Special Edition GOG",
+    "Epic Games": "Skyrim Special Edition EPIC",
+}
+_PROFILE_LOAD_ORDER_FILES = ("plugins.txt", "loadorder.txt")
+
+
+def profile_file_links(instance: Instance, profile: str | None, local_app_data: str | None = None) -> list[tuple[Path, Path]]:
+    """(profile file, virtual target) pairs MO2 links over %LOCALAPPDATA%/<game>, so tools reading
+    the load order (Mutagen, xEdit, LOOT) see the profile instead of the real game's plugins.txt."""
+    if instance.game_name.casefold() != "skyrim special edition":
+        return []
+    root = local_app_data or os.environ.get("LOCALAPPDATA")
+    if not root:
+        return []
+    parser = configparser.ConfigParser(interpolation=None)
+    if instance.ini.exists():
+        parser.read(instance.ini, encoding="utf-8-sig")
+    edition = parser.get("General", "game_edition", fallback="Steam").strip().strip('"') or "Steam"
+    target_dir = Path(root) / _LOCAL_APPDATA_DIRECTORIES.get(edition, "Skyrim Special Edition")
+    profile_dir = instance.profile_path(profile)
+    return [(profile_dir / name, target_dir / name) for name in _PROFILE_LOAD_ORDER_FILES if (profile_dir / name).is_file()]
+
+
 def run(
     instance: Instance,
     profile: str | None,
@@ -137,6 +164,8 @@ def run(
         dll.usvfsClearVirtualMappings.restype = None
         dll.usvfsVirtualLinkDirectoryStatic.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
         dll.usvfsVirtualLinkDirectoryStatic.restype = ctypes.c_bool
+        dll.usvfsVirtualLinkFile.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
+        dll.usvfsVirtualLinkFile.restype = ctypes.c_bool
         dll.usvfsDisconnectVFS.restype = None
         params = dll.usvfsCreateParameters()
         shm_name = f"mo2cli_{os.getpid()}_{uuid.uuid4().hex[:8]}".encode("ascii")
@@ -154,6 +183,10 @@ def run(
                     raise Mo2Error(f"USVFS virtual folder mapping failed: {source}")
         if not dll.usvfsVirtualLinkDirectoryStatic(str(instance.overwrite_dir), str(game_destination), LINKFLAG_CREATETARGET | LINKFLAG_RECURSIVE):
             raise Mo2Error("USVFS overwrite mapping failed.")
+        file_links = profile_file_links(instance, profile)
+        for source, target in file_links:
+            if not dll.usvfsVirtualLinkFile(str(source), str(target), 0):
+                raise Mo2Error(f"USVFS profile file mapping failed: {source}")
         startup = STARTUPINFO()
         startup.cb = ctypes.sizeof(STARTUPINFO)
         command_line = subprocess.list2cmdline([str(executable), *args])
@@ -163,7 +196,7 @@ def run(
         create_process.restype = ctypes.c_bool
         if not create_process(str(executable), mutable_command, None, None, False, 0, None, str(cwd), ctypes.byref(startup), ctypes.byref(process)):
             raise Mo2Error(f"USVFS failed to start process: {ctypes.get_last_error()}")
-        result = {"binary": str(executable), "pid": int(process.dwProcessId), "staging": str(staging) if staging else None, "mapped_sources": [str(source) for source in sources if source is not None] if direct_mods else None, "destination": str(game_destination), "virtualization": "usvfs", "waited": wait}
+        result = {"binary": str(executable), "pid": int(process.dwProcessId), "staging": str(staging) if staging else None, "mapped_sources": [str(source) for source in sources if source is not None] if direct_mods else None, "destination": str(game_destination), "virtualization": "usvfs", "profile_files": {str(target): str(source) for source, target in file_links}, "waited": wait}
         if wait:
             ctypes.windll.kernel32.WaitForSingleObject(process.hProcess, INFINITE)
             exit_code = ctypes.c_ulong()
