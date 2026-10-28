@@ -324,9 +324,34 @@ class ToolWrapTests(unittest.TestCase):
         args, destination = self.vfs_args
         self.assertEqual(args, ["--tesv", str(self.game), "-o", str(self.root / "mods" / "Pandora Output"), "--auto_run", "--auto_close"])
         self.assertFalse(result["ok"])
-        self.assertIn("warning", result)
+        self.assertEqual(result["active_mods_created"], [])
         plan = toolwrap.pandora_run(self.instance, None, exe=str(self.exe), auto_run=False, auto_close=False, dry_run=True)
         self.assertEqual(plan["arguments"], ["--tesv", str(self.game), "-o", str(self.root / "mods" / "Pandora Output")])
+
+    def test_pandora_run_seeds_active_mods_and_captures_overwrite(self):
+        (self.root / "mods" / "ModA" / "Nemesis_Engine" / "mod" / "colis").mkdir(parents=True)
+        (self.root / "mods" / "ModA" / "Nemesis_Engine" / "mod" / "colis" / "info.ini").write_text("name=Precision\n", encoding="utf-8")
+        (self.root / "mods" / "ModB" / "Nemesis_Engine" / "mod" / "nofile").mkdir(parents=True)
+        (self.game / "Data" / "Pandora_Engine" / "mod" / "pandora").mkdir(parents=True)
+        (self.game / "Data" / "Pandora_Engine" / "mod" / "pandora" / "info.xml").write_text("<x/>", encoding="utf-8")
+        (self.root / "mods" / "ModB" / "Nemesis_Engine" / "mod" / "aaa").mkdir(parents=True)
+        (self.root / "mods" / "ModB" / "Nemesis_Engine" / "mod" / "aaa" / "info.ini").write_text("name=A\n", encoding="utf-8")
+        self.assertEqual(toolwrap.pandora_mod_codes(self.instance, None), ["aaa", "colis", "pandora"])
+
+        def fake_vfs(instance, profile, binary, args, usvfs_dir, destination, direct_mods=False, **kwargs):
+            overwrite = self.root / "overwrite"
+            (overwrite / "meshes").mkdir(parents=True, exist_ok=True)
+            (overwrite / "meshes" / "behavior.hkx").write_bytes(b"hkx")
+            (overwrite / "Engine.log").write_text("log", encoding="utf-8")
+            return {"returncode": 0}
+
+        with patch("mo2cli.toolwrap.run_vfs", side_effect=fake_vfs):
+            result = toolwrap.pandora_run(self.instance, None, exe=str(self.exe))
+        saved = json.loads((self.exe.parent / "Pandora_Engine" / "ActiveMods.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved, [{"code": "aaa", "active": True, "priority": 1}, {"code": "colis", "active": True, "priority": 2}, {"code": "pandora", "active": True, "priority": 3}])
+        self.assertEqual(result["capture"]["moved"], ["meshes/behavior.hkx"])
+        self.assertTrue((self.root / "mods" / "Pandora Output" / "meshes" / "behavior.hkx").is_file())
+        self.assertTrue((self.root / "overwrite" / "Engine.log").is_file())
 
     def test_cli_dry_runs_need_no_lock(self):
         with patch("mo2cli.safety._running_process_names", return_value={"modorganizer.exe"}):

@@ -63,10 +63,12 @@ def snapshot_overwrite(instance: Instance) -> dict[str, tuple[int, int]]:
     return result
 
 
-def capture_new_files(instance: Instance, profile: str | None, mod: str, before: dict[str, tuple[int, int]]) -> dict[str, object]:
-    """Move files that are new or changed in ``overwrite`` since ``before`` into mod ``mod`` (journaled)."""
+def capture_new_files(instance: Instance, profile: str | None, mod: str, before: dict[str, tuple[int, int]], exclude: frozenset[str] = frozenset()) -> dict[str, object]:
+    """Move files that are new or changed in ``overwrite`` since ``before`` into mod ``mod`` (journaled).
+
+    ``exclude`` holds casefolded relative names (tool logs/settings) left in overwrite."""
     after = snapshot_overwrite(instance)
-    changed = sorted(name for name, state in after.items() if before.get(name) != state)
+    changed = sorted(name for name, state in after.items() if before.get(name) != state and name.casefold() not in exclude)
     result: dict[str, object] = {"mod": mod, "moved": [], "count": 0}
     if not changed:
         return result
@@ -574,6 +576,7 @@ def _run_generator(
     capture_to: str | None,
     usvfs_dir: str | None,
     destination: str | None,
+    capture_exclude: frozenset[str] = frozenset(),
 ) -> dict[str, object]:
     """Create the real output mod folder, run the tool in USVFS and optionally capture stray overwrite files."""
     ensure_output_mod(instance, profile, output_mod)
@@ -584,7 +587,7 @@ def _run_generator(
     output_dir = instance.mods_dir / output_mod
     result["output_files"] = sum(1 for path in output_dir.rglob("*") if path.is_file() and path.name != "meta.ini") if output_dir.is_dir() else 0
     if capture_to:
-        result["capture"] = capture_new_files(instance, profile, capture_to, before)
+        result["capture"] = capture_new_files(instance, profile, capture_to, before, capture_exclude)
     return result
 
 
@@ -631,6 +634,36 @@ def synthesis_run(
     return _run_generator(instance, profile, binary, arguments, result, output_mod, capture_to, usvfs_dir, str(data))
 
 
+# Pandora 5 writes these next to its virtual Data output; they are run state, not output.
+_PANDORA_RUN_FILES = frozenset({"engine.log", "settings.json"})
+
+
+def pandora_mod_codes(instance: Instance, profile: str | None) -> list[str]:
+    """Behavior patch codes Pandora lists: Nemesis_Engine/mod/<code>/info.ini and
+    Pandora_Engine/mod/<code>/info.xml in enabled mods and the game Data; ``pandora`` (Pandora Base) last."""
+    roots = [root for root in instance.active_mod_roots(profile) if root is not None]
+    data = _game_data(instance)
+    if data is not None:
+        roots.append(Path(data))
+    codes: list[str] = []
+    for root in roots:
+        for folder, marker in (("Nemesis_Engine", "info.ini"), ("Pandora_Engine", "info.xml")):
+            mod_dir = root / folder / "mod"
+            if not mod_dir.is_dir():
+                continue
+            for entry in sorted(mod_dir.iterdir()):
+                if (entry / marker).is_file() and entry.name.casefold() not in {code.casefold() for code in codes}:
+                    codes.append(entry.name)
+    return sorted(codes, key=lambda code: (code.casefold() == "pandora", code.casefold()))
+
+
+def write_pandora_active_mods(path: Path, codes: list[str]) -> None:
+    """Pandora's ActiveMods.json (``ModSaveEntry`` list: code, active, priority) so --auto_run works headless."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entries = [{"code": code, "active": True, "priority": index} for index, code in enumerate(codes, 1)]
+    path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+
+
 def pandora_run(
     instance: Instance,
     profile: str | None,
@@ -643,7 +676,11 @@ def pandora_run(
     usvfs_dir: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, object]:
-    """Pandora Behaviour Engine+ with ``--tesv`` (game root, not Data), ``-o``, ``--auto_run``, ``--auto_close``."""
+    """Pandora Behaviour Engine+ with ``--tesv`` (game root, not Data), ``-o``, ``--auto_run``, ``--auto_close``.
+
+    Pandora 5 ignores ``-o`` and writes into the (virtual) Data folder, i.e. overwrite, so new overwrite
+    files are captured into ``output_mod`` unless ``capture_to`` names another mod. Without a saved
+    ActiveMods.json, one enabling every installed behavior patch is written first."""
     binary = find_tool(instance, exe, PANDORA_NAMES)
     root = Path(tesv).expanduser() if tesv else instance.game_path
     if root is None:
@@ -657,9 +694,12 @@ def pandora_run(
     result: dict[str, object] = {"tool": "pandora", "binary": str(binary), "arguments": arguments, "output_mod": output_mod, "output": str(output), "dry_run": dry_run, "virtualization": "usvfs"}
     if auto_run:
         cache = binary.parent / "Pandora_Engine" / "ActiveMods.json"
-        result["active_mods_cache"] = str(cache) if cache.is_file() else None
+        result["active_mods_cache"] = str(cache)
         if not cache.is_file():
-            result["warning"] = "Pandora_Engine/ActiveMods.json not found: --auto_run needs one successful GUI run first."
+            codes = pandora_mod_codes(instance, profile)
+            result["active_mods_created"] = codes
+            if not dry_run:
+                write_pandora_active_mods(cache, codes)
     if dry_run:
         return result
-    return _run_generator(instance, profile, binary, arguments, result, output_mod, capture_to, usvfs_dir, None)
+    return _run_generator(instance, profile, binary, arguments, result, output_mod, capture_to or output_mod, usvfs_dir, None, _PANDORA_RUN_FILES)
