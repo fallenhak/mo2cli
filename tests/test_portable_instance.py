@@ -94,6 +94,8 @@ class PortableInstanceTests(unittest.TestCase):
         self.init()
         self.assertTrue((self.target / "ModOrganizer.exe").is_file())
         self.assertTrue((self.target / "downloads" / "Mod.Organizer-2.5.2.7z").is_file())
+        # the ".7z" extension must not leak into the version
+        self.assertIn("version=2.5.2\r\n", (self.target / "ModOrganizer.ini").read_bytes().decode("utf-8"))
 
     def test_modorganizer_ini_matches_mo2_format_exactly(self):
         self.init()

@@ -153,7 +153,8 @@ def initialize_portable(
     wrapper = None if has_top_level_exe else archive_common_root(records)
     if not has_top_level_exe and wrapper is None:
         raise Mo2Error("The archive does not look like Mod Organizer 2: no ModOrganizer.exe at its top level or inside a single root folder.")
-    version_match = re.search(r"(\d+\.\d+\.\d+(?:\.\d+)?)", archive.name)
+    # Strip the extension first: "Mod.Organizer-2.5.2.7z" must not read as 2.5.2.7.
+    version_match = re.search(r"(\d+\.\d+\.\d+(?:\.\d+)?)$", re.sub(r"\.(7z|zip|rar)$", "", archive.name, flags=re.IGNORECASE))
     version = version_match.group(1) if version_match else None
     is_skyrim_se = game_name.casefold() == "skyrim special edition"
     edition = detect_game_edition(game) if is_skyrim_se else None
