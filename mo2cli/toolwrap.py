@@ -271,8 +271,15 @@ def loot_sort(
         data.mkdir(parents=True)
         for path in files.values():
             _stage_plugin(path, data / path.name)
+        # LOOT reads the game version from the executable and Creation Club plugins from the .ccc file.
+        if instance.game_path and instance.game_path.is_dir():
+            for path in instance.game_path.iterdir():
+                if path.is_file() and path.suffix.casefold() in {".exe", ".ccc"}:
+                    _stage_plugin(path, root / "game" / path.name)
         staged_in, staged_out, report_path = root / "loadorder.txt", root / "sorted-loadorder.txt", root / "report.json"
         shutil.copy2(loadorder, staged_in)
+        if (profile_path / "plugins.txt").is_file():
+            shutil.copy2(profile_path / "plugins.txt", root / "plugins.txt")
         command = [str(binary), "--game", loot_game, "--gamePath", str(root / "game"), "--pluginListPath", str(staged_in), "--out", str(report_path), "--pluginListOutputPath", str(staged_out), "--language", "en"]
         if not update_masterlist:
             command.append("--skipUpdateMasterlist")
@@ -285,9 +292,15 @@ def loot_sort(
         result["returncode"] = completed.returncode
         if completed.returncode:
             raise Mo2Error(f"LOOT failed: {(completed.stderr or completed.stdout).strip()[:500]}")
-        if not staged_out.is_file():
-            raise Mo2Error("LOOT did not write --pluginListOutputPath; load order untouched.")
-        sorted_names = [entry.name for entry in PluginList.read(staged_out).entries]
+        # MO2's lootcli ignores --pluginListOutputPath and writes the sorted order back to --pluginListPath.
+        if staged_out.is_file():
+            sorted_path = staged_out
+        elif report_path.is_file():
+            sorted_path = staged_in
+        else:
+            raise Mo2Error("LOOT wrote neither a sorted load order nor a report; load order untouched.")
+        result["sorted_from"] = sorted_path.name
+        sorted_names = [entry.name for entry in PluginList.read(sorted_path).entries]
         current = [entry.name for entry in PluginList.read(loadorder).entries]
         if {name.casefold() for name in sorted_names} != {name.casefold() for name in current}:
             missing = sorted({n.casefold() for n in current} - {n.casefold() for n in sorted_names})

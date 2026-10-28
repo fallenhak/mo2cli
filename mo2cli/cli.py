@@ -302,6 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     tool_register.add_argument("--working-directory")
     tool_register.add_argument("--arguments", default="")
     tool_register.add_argument("--replace", action="store_true")
+    tool_register.add_argument("--allow-missing", action="store_true", help="Register even if the binary does not exist yet (e.g. deployed by Root Builder)")
     tool_remove = tls.add_parser("remove", help="Remove an MO2 custom executable by index or unique title")
     tool_remove.add_argument("target")
     tool_run = tls.add_parser("run", help="Run executable directly without USVFS injection")
@@ -974,7 +975,7 @@ def run(args: argparse.Namespace) -> int:
         if args.tools_command == "list":
             _output(instance.executables(), args.json)
         elif args.tools_command == "register":
-            _output(register_executable(instance, args.title, args.binary, args.working_directory, args.arguments, args.replace), args.json)
+            _output(register_executable(instance, args.title, args.binary, args.working_directory, args.arguments, args.replace, args.allow_missing), args.json)
         elif args.tools_command == "remove":
             _output(remove_executable(instance, args.target), args.json)
         elif args.tools_command == "run":

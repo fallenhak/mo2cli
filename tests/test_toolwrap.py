@@ -47,11 +47,12 @@ class ToolWrapTests(unittest.TestCase):
         summary = toolwrap.parse_xedit_log("Removed Records: 7\nUndeleted Records: 3\n")
         self.assertEqual((summary["itm"], summary["udr"], summary["source"]), (7, 3, "summary"))
 
-    def fake_loot(self, order, report=None, returncode=0):
+    def fake_loot(self, order, report=None, returncode=0, in_place=False):
         def run(command, **kwargs):
             self.last_command = command
             if returncode == 0:
-                Path(command[command.index("--pluginListOutputPath") + 1]).write_text("\n".join(order) + "\n", encoding="utf-8")
+                target = "--pluginListPath" if in_place else "--pluginListOutputPath"
+                Path(command[command.index(target) + 1]).write_text("\n".join(order) + "\n", encoding="utf-8")
                 Path(command[command.index("--out") + 1]).write_text(json.dumps(report or {}), encoding="utf-8")
             return subprocess.CompletedProcess(command, returncode, "", "boom")
         return run
@@ -88,6 +89,24 @@ class ToolWrapTests(unittest.TestCase):
         with patch("mo2cli.toolwrap.subprocess.run", side_effect=self.fake_loot([], returncode=1)):
             with self.assertRaises(Mo2Error):
                 toolwrap.loot_sort(self.instance, None, exe=str(self.exe))
+
+    def test_loot_sort_reads_order_written_back_to_plugin_list_path(self):
+        (self.game / "SkyrimSE.exe").write_bytes(b"MZ")
+        (self.game / "Skyrim.ccc").write_text("", encoding="utf-8")
+        staged = {}
+
+        def run(command, **kwargs):
+            game = Path(command[command.index("--gamePath") + 1])
+            staged["files"] = sorted(path.name for path in game.rglob("*") if path.is_file())
+            staged["plugins_txt"] = (Path(command[command.index("--pluginListPath") + 1]).parent / "plugins.txt").is_file()
+            return self.fake_loot(["Skyrim.esm", "B.esp", "A.esp"], in_place=True)(command, **kwargs)
+
+        with patch("mo2cli.toolwrap.subprocess.run", side_effect=run):
+            result = toolwrap.loot_sort(self.instance, None, exe=str(self.exe), apply=True)
+        self.assertEqual(staged["files"], ["A.esp", "B.esp", "Skyrim.ccc", "Skyrim.esm", "SkyrimSE.exe"])
+        self.assertTrue(staged["plugins_txt"])
+        self.assertEqual(result["sorted_from"], "loadorder.txt")
+        self.assertEqual(self.loadorder(), ["Skyrim.esm", "B.esp", "A.esp"])
 
     def test_loot_sort_dry_run_does_not_start_process(self):
         with patch("mo2cli.toolwrap.subprocess.run", side_effect=AssertionError("must not run")):

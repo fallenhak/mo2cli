@@ -682,6 +682,15 @@ class FeatureTests(unittest.TestCase):
         registered = next(item for item in self.instance.executables() if item["title"] == "BodySlide")
         self.assertEqual(Path(str(registered["binary"])), replacement)
 
+    def test_register_executable_allow_missing_binary(self):
+        binary = self.root / "Stock Game" / "skse64_loader.exe"
+        with self.assertRaises(Mo2Error):
+            register_executable(self.instance, "SKSE", str(binary), working_directory=str(self.root))
+        result = register_executable(self.instance, "SKSE", str(binary), working_directory=str(self.root), allow_missing=True)
+        self.assertFalse(result["binary_exists"])
+        registered = next(item for item in self.instance.executables() if item["title"] == "SKSE")
+        self.assertEqual(Path(str(registered["binary"])), binary.resolve())
+
     def test_remove_executable_by_index(self):
         binary = self.root / "BrokenTool.exe"
         binary.write_bytes(b"test")

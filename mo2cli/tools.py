@@ -15,13 +15,18 @@ def register_executable(
     working_directory: str | None = None,
     arguments: str = "",
     replace: bool = False,
+    allow_missing: bool = False,
 ) -> dict[str, object]:
-    """Register a custom executable in ModOrganizer.ini."""
+    """Register a custom executable in ModOrganizer.ini.
+
+    ``allow_missing`` accepts a binary that does not exist yet, such as a Root Builder file
+    that is only copied into the game folder on first launch.
+    """
     clean_title = title.strip()
     if not clean_title:
         raise Mo2Error("Executable title cannot be empty.")
     binary_path = Path(binary).expanduser().resolve()
-    if not binary_path.is_file():
+    if not binary_path.is_file() and not (allow_missing and not binary_path.is_dir()):
         raise Mo2Error(f"Executable file not found: {binary_path}")
     working_path = Path(working_directory).expanduser().resolve() if working_directory else binary_path.parent
     if not working_path.is_dir():
@@ -57,7 +62,7 @@ def register_executable(
             rendered = '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
         document.set(f"{index}\\{field}", rendered, section="customExecutables")
     document.write(instance.ini)
-    return fields | {"index": index, "replaced": existing is not None}
+    return fields | {"index": index, "replaced": existing is not None, "binary_exists": binary_path.is_file()}
 
 
 def remove_executable(instance: Instance, target: str) -> dict[str, object]:
