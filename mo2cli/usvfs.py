@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .workspace import Instance, Mo2Error
 
+LINKFLAG_CREATETARGET = 0x4
 LINKFLAG_RECURSIVE = 0x8
 INFINITE = 0xFFFFFFFF
 
@@ -103,6 +104,8 @@ def run(
         staging = instance.base / ".mo2cli-vfs" / uuid.uuid4().hex
         staging.mkdir(parents=True, exist_ok=False)
         instance.materialize(profile, staging, include_prefixes=include_prefixes)
+    # New files must land in overwrite like under MO2, never in the real game folder.
+    instance.overwrite_dir.mkdir(parents=True, exist_ok=True)
     sources = instance.active_mod_roots(profile) if direct_mods else [staging]
     cookie = os.add_dll_directory(str(dll_dir)) if hasattr(os, "add_dll_directory") else None
     dll = None
@@ -132,8 +135,10 @@ def run(
             raise Mo2Error("USVFS virtual folder mapping failed.")
         if direct_mods:
             for source in sources:
-                if source is not None and not dll.usvfsVirtualLinkDirectoryStatic(str(source), str(game_destination), LINKFLAG_RECURSIVE):
+                if source is not None and source != instance.overwrite_dir and not dll.usvfsVirtualLinkDirectoryStatic(str(source), str(game_destination), LINKFLAG_RECURSIVE):
                     raise Mo2Error(f"USVFS virtual folder mapping failed: {source}")
+        if not dll.usvfsVirtualLinkDirectoryStatic(str(instance.overwrite_dir), str(game_destination), LINKFLAG_CREATETARGET | LINKFLAG_RECURSIVE):
+            raise Mo2Error("USVFS overwrite mapping failed.")
         startup = STARTUPINFO()
         startup.cb = ctypes.sizeof(STARTUPINFO)
         command_line = subprocess.list2cmdline([str(executable), *args])

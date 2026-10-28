@@ -309,7 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
     tool_run.add_argument("title")
     tool_run.add_argument("extra", nargs="*")
     tool_run.add_argument("--wait", action="store_true")
-    xedit_clean = tls.add_parser("xedit-clean", help="Quick auto clean one plugin with SSEEdit (-qac) inside USVFS and parse the log")
+    xedit_clean = tls.add_parser("xedit-clean", help="Quick auto clean one plugin with SSEEdit (-qac) on an isolated copy (or --vfs) and parse the log")
     xedit_clean.add_argument("plugin")
     xedit_clean.add_argument("--exe", help="SSEEdit executable (default: a registered SSEEdit/xEdit tool)")
     xedit_clean.add_argument("--log-dir", help="Directory for -R: (default: <base>/Tools/xedit-logs)")
@@ -317,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     xedit_clean.add_argument("--usvfs-dir")
     xedit_clean.add_argument("--moprofile", action="store_true", help="Also pass -moprofile:<profile>")
     xedit_clean.add_argument("--force", action="store_true", help="Allow cleaning vanilla/Creation Club plugins")
+    xedit_clean.add_argument("--vfs", action="store_true", help="Run inside USVFS instead of an isolated Data copy (needed only when the plugin's masters are not enough)")
     xedit_clean.add_argument("--dry-run", action="store_true")
     loot_sort = tls.add_parser("loot-sort", help="Sort with lootcli into a temporary file; --apply writes loadorder.txt and plugins.txt")
     loot_sort.add_argument("--exe", help="lootcli.exe (default: registered tool or <instance>/loot/lootcli.exe)")
@@ -983,7 +984,7 @@ def run(args: argparse.Namespace) -> int:
         elif args.tools_command == "xedit-clean":
             from . import toolwrap
 
-            result = toolwrap.xedit_clean(instance, args.profile, args.plugin, args.exe, args.log_dir, args.capture_to, args.usvfs_dir, args.moprofile, args.force, args.dry_run)
+            result = toolwrap.xedit_clean(instance, args.profile, args.plugin, args.exe, args.log_dir, args.capture_to, args.usvfs_dir, args.moprofile, args.force, args.dry_run, not args.vfs)
             _output(result, args.json)
             return 0 if args.dry_run or result.get("ok") else 1
         elif args.tools_command == "synthesis-run":

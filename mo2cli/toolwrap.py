@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .formats import PluginList, read_text_exact, write_text
 from .journal import record
-from .plugins import _active_plugin_files
+from .plugins import _active_plugin_files, parse_header
 from .tool_workflows import ensure_output_mod
 from .usvfs import run as run_vfs
 from .workspace import Instance, Mo2Error
@@ -100,8 +100,10 @@ def parse_xedit_log(text: str) -> dict[str, object]:
 
     ``Removing:`` lines are identical-to-master (ITM) records, ``Undeleting:``
     lines are deleted references (UDR) that were undeleted and disabled,
-    ``Skipping:`` lines were left alone. Summary lines are used when the log
-    carries them. The exact wording has not been verified against a real run.
+    ``Skipping:`` lines were left alone. Summary lines (SSEEdit 4.1.5f:
+    ``[Removing "Identical to Master" records done]  Processed Records: N,
+    Removed Records: M``) win when present; quick auto clean repeats its
+    passes, so their counts are summed.
     """
     counts = {"itm": 0, "udr": 0, "skipped": 0}
     for line in text.splitlines():
@@ -113,13 +115,13 @@ def parse_xedit_log(text: str) -> dict[str, object]:
             counts["skipped"] += 1
     summary: dict[str, int] = {}
     for key, pattern in (
-        ("itm", r"(?:removed|identical to master)[^\n\d]{0,40}?(?:records?)?\s*[:=]\s*(\d+)"),
-        ("udr", r"undeleted[^\n\d]{0,40}?(?:records?|references?)?\s*[:=]\s*(\d+)"),
-        ("skipped", r"skipped[^\n\d]{0,40}?(?:records?)?\s*[:=]\s*(\d+)"),
+        ("itm", r"\bRemoved Records\s*[:=]\s*(\d+)"),
+        ("udr", r"\bUndeleted Records\s*[:=]\s*(\d+)"),
+        ("skipped", r"\bSkipped Records\s*[:=]\s*(\d+)"),
     ):
         found = re.findall(pattern, text, re.IGNORECASE)
         if found:
-            summary[key] = max(int(item) for item in found)
+            summary[key] = sum(int(item) for item in found)
     return {
         "itm": summary.get("itm", counts["itm"]),
         "udr": summary.get("udr", counts["udr"]),
@@ -147,7 +149,14 @@ def xedit_clean(
     moprofile: bool = False,
     force: bool = False,
     dry_run: bool = False,
+    isolated: bool = True,
 ) -> dict[str, object]:
+    """Quick auto clean ``plugin``.
+
+    ``isolated`` (default) runs xEdit on a private Data folder holding a copy of the plugin and
+    links to its masters, so nothing outside that folder can change; the result replaces the
+    plugin in its mod (or goes to ``capture_to``). ``isolated=False`` runs xEdit inside USVFS.
+    """
     active = _active_plugin_files(instance, profile)
     source = active.get(plugin.casefold())
     if source is None:
@@ -158,6 +167,8 @@ def xedit_clean(
     binary = find_tool(instance, exe, XEDIT_NAMES)
     profile_path = instance.profile_path(profile)
     logs = Path(log_dir).expanduser() if log_dir else instance.base / "Tools" / "xedit-logs"
+    if isolated:
+        return _xedit_clean_isolated(instance, profile, plugin, source, active, binary, logs, capture_to, dry_run)
     data = instance.game_path / "Data" if instance.game_path and (instance.game_path / "Data").is_dir() else instance.game_path
     if data is None:
         raise Mo2Error("gamePath not found in instance.")
@@ -166,20 +177,48 @@ def xedit_clean(
         arguments.append(f"-I:{profile_path / 'Skyrim.ini'}")
     if moprofile:
         arguments.append(f"-moprofile:{profile_path.name}")
-    arguments += [f"-R:{logs}{os.sep}", plugin]
+    stamp = dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+    # -R: takes a log file path; a directory makes xEdit crash on exit without writing the log.
+    arguments += [f"-R:{logs / f'SSEEdit-{plugin}-{stamp}.txt'}", plugin]
     result: dict[str, object] = {"plugin": plugin, "source_file": str(source), "binary": str(binary), "arguments": arguments, "log_dir": str(logs), "dry_run": dry_run, "virtualization": "usvfs"}
     if dry_run:
         return result
     logs.mkdir(parents=True, exist_ok=True)
-    backup = instance.base / ".mo2cli-trash" / f"xedit-clean-{dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')}" / source.name
+    backup = instance.base / ".mo2cli-trash" / f"xedit-clean-{stamp}" / source.name
     backup.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, backup)
     source_state = (source.stat().st_size, source.stat().st_mtime_ns)
+    game_copy = next((path for path in data.iterdir() if path.name.casefold() == folded), None) if data.is_dir() else None
+    game_state = (game_copy.stat().st_size, game_copy.stat().st_mtime_ns) if game_copy else None
     before = snapshot_overwrite(instance)
     started = time.time()
     run = run_vfs(instance, profile, str(binary), arguments, usvfs_dir, str(data), direct_mods=True)
     result["returncode"] = run.get("returncode")
     result["backup"] = str(backup)
+    if game_copy is not None and (not game_copy.exists() or (game_copy.stat().st_size, game_copy.stat().st_mtime_ns) != game_state):
+        raise Mo2Error(f"xEdit changed the real game file {game_copy}; restore it from {backup if source == game_copy else 'the game install'}.")
+    # xEdit saves through a new file plus renames, so under USVFS the cleaned plugin and its
+    # "SSEEdit Backups"/"SSEEdit Cache" land in overwrite and the mod copy may be moved away.
+    for name in [name for name, state in snapshot_overwrite(instance).items() if before.get(name) != state and name.split("/")[0].casefold() in {"sseedit backups", "sseedit cache"}]:
+        moved_to = backup.parent / "overwrite" / name
+        moved_to.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(instance.overwrite_dir / name), str(moved_to))
+    for folder in ("SSEEdit Backups", "SSEEdit Cache"):
+        if (instance.overwrite_dir / folder).is_dir() and not any((instance.overwrite_dir / folder).iterdir()):
+            (instance.overwrite_dir / folder).rmdir()
+    cleaned = next((path for path in instance.overwrite_dir.iterdir() if path.name.casefold() == folded and path.is_file()), None) if instance.overwrite_dir.is_dir() else None
+    if cleaned is not None and before.get(cleaned.name) == (cleaned.stat().st_size, cleaned.stat().st_mtime_ns):
+        cleaned = None
+    in_mod = instance.mods_dir in source.parents
+    if cleaned is not None and not capture_to and in_mod:
+        if source.exists():
+            source.unlink()
+        shutil.move(str(cleaned), str(source))
+        result["cleaned_into"] = str(source)
+    elif cleaned is not None and not capture_to:
+        result["cleaned_into"] = str(cleaned)
+    if not source.exists():
+        shutil.copy2(backup, source)
     result["modified_in_place"] = (source.stat().st_size, source.stat().st_mtime_ns) != source_state
     log = _newest_log(logs, started)
     if log is not None:
@@ -190,6 +229,82 @@ def xedit_clean(
     result["ok"] = run.get("returncode") in (0, None) and log is not None
     if capture_to:
         result["capture"] = capture_new_files(instance, profile, capture_to, before)
+    return result
+
+
+def _xedit_clean_isolated(
+    instance: Instance,
+    profile: str | None,
+    plugin: str,
+    source: Path,
+    active: dict[str, Path],
+    binary: Path,
+    logs: Path,
+    capture_to: str | None,
+    dry_run: bool,
+) -> dict[str, object]:
+    masters: list[Path] = []
+    seen: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name.casefold() in seen:
+            return
+        seen.add(name.casefold())
+        path = active.get(name.casefold())
+        if path is None:
+            raise Mo2Error(f"Master of {plugin} not found among active mods or game Data: {name}")
+        for master in parse_header(path).masters:
+            visit(master)
+        masters.append(path)
+
+    for master in parse_header(source).masters:
+        visit(master)
+    in_mod = instance.mods_dir in source.parents
+    if not capture_to and not in_mod:
+        raise Mo2Error(f"{source} is not inside a mod; copy it into a mod first or pass --capture-to.")
+    stamp = dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+    log_file = logs / f"SSEEdit-{plugin}-{stamp}.txt"
+    result: dict[str, object] = {"plugin": plugin, "source_file": str(source), "binary": str(binary), "masters": [path.name for path in masters], "log": str(log_file), "dry_run": dry_run, "virtualization": "isolated"}
+    result["arguments"] = ["-SSE", "-qac", "-autoexit", "-autoload", "-IKnowWhatImDoing", "-D:<isolated Data>", "-P:<isolated plugins.txt>", f"-R:{log_file}", source.name]
+    if dry_run:
+        return result
+    logs.mkdir(parents=True, exist_ok=True)
+    backup = instance.base / ".mo2cli-trash" / f"xedit-clean-{stamp}" / source.name
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, backup)
+    result["backup"] = str(backup)
+    master_state = {path: (path.stat().st_size, path.stat().st_mtime_ns) for path in masters}
+    with tempfile.TemporaryDirectory(prefix="mo2cli-xedit-") as temporary:
+        root = Path(temporary)
+        data = root / "Data"
+        data.mkdir()
+        for path in masters:
+            _stage_plugin(path, data / path.name)
+        target = data / source.name
+        shutil.copy2(source, target)
+        plugins_txt = root / "plugins.txt"
+        plugins_txt.write_text("".join(f"*{path.name}\n" for path in [*masters, target]), encoding="utf-8")
+        arguments = ["-SSE", "-qac", "-autoexit", "-autoload", "-IKnowWhatImDoing", f"-D:{data}", f"-P:{plugins_txt}", f"-R:{log_file}", source.name]
+        result["arguments"] = arguments
+        completed = subprocess.run([str(binary), *arguments], cwd=str(binary.parent))
+        result["returncode"] = completed.returncode
+        changed = [str(path) for path, state in master_state.items() if (path.stat().st_size, path.stat().st_mtime_ns) != state]
+        if changed:
+            raise Mo2Error(f"xEdit changed master files it should only read: {changed}")
+        if not target.is_file():
+            raise Mo2Error(f"xEdit left no {source.name} behind; source untouched (backup {backup}).")
+        cleaned = target.read_bytes() != source.read_bytes()
+        result["cleaned"] = cleaned
+        if cleaned:
+            if capture_to:
+                destination = ensure_output_mod(instance, profile, capture_to) / source.name
+            else:
+                destination = source
+            shutil.copy2(target, destination)
+            result["cleaned_into"] = str(destination)
+    if log_file.is_file():
+        result.update(parse_xedit_log(log_file.read_text(encoding="utf-8", errors="replace")))
+    result["ok"] = completed.returncode == 0 and log_file.is_file()
     return result
 
 

@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -46,6 +47,17 @@ class ToolWrapTests(unittest.TestCase):
         self.assertEqual((parsed["itm"], parsed["udr"], parsed["skipped"], parsed["source"]), (2, 1, 1, "lines"))
         summary = toolwrap.parse_xedit_log("Removed Records: 7\nUndeleted Records: 3\n")
         self.assertEqual((summary["itm"], summary["udr"], summary["source"]), (7, 3, "summary"))
+
+    def test_parse_xedit_log_sseedit_415_summary(self):
+        text = (
+            "[02:08] Done: Applying Filter, [Pass 1] Processed Records: 21234, [Pass 2] Processed Records: 18911\n"
+            "[Undeleting and Disabling References done]  Processed Records: 18910, Undeleted Records: 93, Elapsed Time: 00:00\n"
+            "[Removing \"Identical to Master\" records done]  Processed Records: 18910, Removed Records: 386, Elapsed Time: 00:00\n"
+            "[Undeleting and Disabling References done]  Processed Records: 18524, Undeleted Records: 0, Elapsed Time: 00:00\n"
+            "[Removing \"Identical to Master\" records done]  Processed Records: 18524, Removed Records: 0, Elapsed Time: 00:00\n"
+        )
+        parsed = toolwrap.parse_xedit_log(text)
+        self.assertEqual((parsed["itm"], parsed["udr"], parsed["source"]), (386, 93, "summary"))
 
     def fake_loot(self, order, report=None, returncode=0, in_place=False):
         def run(command, **kwargs):
@@ -108,6 +120,40 @@ class ToolWrapTests(unittest.TestCase):
         self.assertEqual(result["sorted_from"], "loadorder.txt")
         self.assertEqual(self.loadorder(), ["Skyrim.esm", "B.esp", "A.esp"])
 
+    def test_xedit_clean_returns_overwrite_output_to_source_mod(self):
+        logs = self.root / "logs"
+        source = self.root / "mods" / "ModA" / "A.esp"
+
+        def fake_vfs(instance, profile, binary, args, usvfs_dir, destination, direct_mods=False, **kwargs):
+            self.log_arg = next(item for item in args if item.startswith("-R:"))
+            Path(self.log_arg[3:]).write_text("Removing: [WEAP:1]\nDone\n", encoding="utf-8")
+            backups = instance.overwrite_dir / "SSEEdit Backups"
+            backups.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(backups / "A.esp.backup.1"))
+            (instance.overwrite_dir / "A.esp").write_bytes(b"cleaned")
+            return {"returncode": 0}
+
+        with patch("mo2cli.toolwrap.run_vfs", side_effect=fake_vfs):
+            result = toolwrap.xedit_clean(self.instance, None, "A.esp", exe=str(self.exe), log_dir=str(logs), isolated=False)
+        self.assertTrue(self.log_arg.endswith(".txt"))
+        self.assertTrue(result["ok"])
+        self.assertEqual(source.read_bytes(), b"cleaned")
+        self.assertEqual(result["cleaned_into"], str(source))
+        self.assertFalse((self.root / "overwrite" / "A.esp").exists())
+        self.assertFalse((self.root / "overwrite" / "SSEEdit Backups").exists())
+        self.assertEqual(Path(result["backup"]).read_bytes(), b"ModA")
+
+    def test_xedit_clean_fails_loudly_when_game_file_changes(self):
+        (self.root / "mods" / "ModA" / "Skyrim.esm").write_bytes(b"copy")
+
+        def fake_vfs(instance, profile, binary, args, usvfs_dir, destination, direct_mods=False, **kwargs):
+            (self.game / "Data" / "Skyrim.esm").write_bytes(b"cleaned in the wrong place")
+            return {"returncode": 0}
+
+        with patch("mo2cli.toolwrap.run_vfs", side_effect=fake_vfs):
+            with self.assertRaisesRegex(Mo2Error, "real game file"):
+                toolwrap.xedit_clean(self.instance, None, "Skyrim.esm", exe=str(self.exe), log_dir=str(self.root / "logs"), force=True, isolated=False)
+
     def test_loot_sort_dry_run_does_not_start_process(self):
         with patch("mo2cli.toolwrap.subprocess.run", side_effect=AssertionError("must not run")):
             result = toolwrap.loot_sort(self.instance, None, exe=str(self.exe), dry_run=True)
@@ -125,7 +171,7 @@ class ToolWrapTests(unittest.TestCase):
             return {"returncode": 0}
 
         with patch("mo2cli.toolwrap.run_vfs", side_effect=fake_vfs):
-            result = toolwrap.xedit_clean(self.instance, None, "A.esp", exe=str(self.exe), log_dir=str(logs), capture_to="Cleaned Plugins")
+            result = toolwrap.xedit_clean(self.instance, None, "A.esp", exe=str(self.exe), log_dir=str(logs), capture_to="Cleaned Plugins", isolated=False)
         binary, args, destination, direct = self.vfs_args
         for flag in ("-SSE", "-qac", "-autoexit", "-autoload", "-IKnowWhatImDoing"):
             self.assertIn(flag, args)
@@ -142,6 +188,41 @@ class ToolWrapTests(unittest.TestCase):
         undo_last(self.instance)
         self.assertEqual((self.root / "overwrite" / "A.esp").read_bytes(), b"cleaned")
         self.assertFalse((self.root / "mods" / "Cleaned Plugins" / "A.esp").exists())
+
+    def test_xedit_clean_isolated_cleans_copy_with_masters_only(self):
+        source = self.root / "mods" / "ModA" / "A.esp"
+        source.write_bytes(b"TES4\x00\x00\x00\x00" + b"\x00" * 16)  # header without masters
+        game_master = self.game / "Data" / "Skyrim.esm"
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            arguments = command[1:]
+            data = Path(next(item for item in arguments if item.startswith("-D:"))[3:])
+            seen["data"] = sorted(path.name for path in data.iterdir())
+            seen["plugins"] = Path(next(item for item in arguments if item.startswith("-P:"))[3:]).read_text(encoding="utf-8").split()
+            # xEdit saves a new file and renames the original into a backup folder
+            (data / "SSEEdit Backups").mkdir()
+            (data / "A.esp").rename(data / "SSEEdit Backups" / "A.esp.backup")
+            (data / "A.esp").write_bytes(b"cleaned")
+            Path(next(item for item in arguments if item.startswith("-R:"))[3:]).write_text("Removing: [WEAP:1]\nDone\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch("mo2cli.toolwrap.parse_header", side_effect=lambda path: type("H", (), {"masters": ["Skyrim.esm"] if path.name == "A.esp" else []})()):
+            with patch("mo2cli.toolwrap.subprocess.run", side_effect=fake_run):
+                result = toolwrap.xedit_clean(self.instance, None, "A.esp", exe=str(self.exe), log_dir=str(self.root / "logs"))
+        self.assertEqual(seen["data"], ["A.esp", "Skyrim.esm"])
+        self.assertEqual(seen["plugins"], ["*Skyrim.esm", "*A.esp"])
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["cleaned"])
+        self.assertEqual(result["itm"], 1)
+        self.assertEqual(source.read_bytes(), b"cleaned")
+        self.assertEqual(game_master.read_bytes(), b"x")
+        self.assertEqual(Path(result["backup"]).read_bytes()[:4], b"TES4")
+
+    def test_xedit_clean_isolated_refuses_game_file_without_capture(self):
+        with patch("mo2cli.toolwrap.subprocess.run", side_effect=AssertionError("must not run")):
+            with self.assertRaisesRegex(Mo2Error, "not inside a mod"):
+                toolwrap.xedit_clean(self.instance, None, "Skyrim.esm", exe=str(self.exe), force=True)
 
     def test_xedit_clean_guards(self):
         with self.assertRaises(Mo2Error):
