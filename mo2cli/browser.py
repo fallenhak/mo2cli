@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .workspace import Mo2Error
 
@@ -38,6 +39,53 @@ def _browser_profile_dir() -> Path:
     return profile_dir
 
 
+def _pid_alive(pid: int) -> bool:
+    from .safety import _pid_alive as alive
+
+    return alive(pid)
+
+
+@contextlib.contextmanager
+def _profile_lock(timeout: float = 1800.0, poll: float = 1.0) -> Iterator[None]:
+    """Serialize use of the shared persistent browser profile across mo2cli processes.
+
+    Chromium refuses a second ``launch_persistent_context`` on the same user-data-dir, so parallel
+    ``downloads fetch --auto-download`` runs wait here instead of failing. A lock left by a dead
+    process is taken over."""
+    lock_path = Path.home() / ".mo2cli" / "browser_profile.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        except FileExistsError:
+            try:
+                owner = int(lock_path.read_text(encoding="utf-8").strip() or 0)
+            except (OSError, ValueError):
+                owner = 0
+            if owner and not _pid_alive(owner):
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass
+                continue
+            if time.monotonic() >= deadline:
+                raise Mo2Error(f"Browser profile is busy (PID {owner}); another auto-download is still running: {lock_path}")
+            time.sleep(poll)
+            continue
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(str(os.getpid()))
+        break
+    try:
+        yield
+    finally:
+        try:
+            if lock_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                lock_path.unlink()
+        except OSError:
+            pass
+
+
 def _detect_browser_channel() -> str | None:
     if os.name == "nt":
         edge_paths = [
@@ -67,7 +115,7 @@ def interactive_login() -> None:
     print("Opening browser for Nexus Mods login...")
     print("Please log in to your account. Once logged in, you can close the browser or wait.")
 
-    with sync_playwright() as p:
+    with _profile_lock(), sync_playwright() as p:
         kwargs: dict[str, Any] = {
             "user_data_dir": str(profile_dir),
             "headless": False,
@@ -122,7 +170,7 @@ def resolve_nxm_url(page_url: str, timeout: float = 35.0) -> str:
 
     captured_url: str | None = None
 
-    with sync_playwright() as p:
+    with _profile_lock(), sync_playwright() as p:
         kwargs: dict[str, Any] = {
             "user_data_dir": str(profile_dir),
             "headless": False,
@@ -243,7 +291,7 @@ def batch_resolve_nxm_urls(urls: list[str], concurrency: int = 3, timeout: float
     channel = _detect_browser_channel()
     results: dict[str, str] = {}
 
-    with sync_playwright() as p:
+    with _profile_lock(), sync_playwright() as p:
         kwargs: dict[str, Any] = {
             "user_data_dir": str(profile_dir),
             "headless": False,
