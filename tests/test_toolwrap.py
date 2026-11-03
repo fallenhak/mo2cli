@@ -353,6 +353,24 @@ class ToolWrapTests(unittest.TestCase):
         self.assertTrue((self.root / "mods" / "Pandora Output" / "meshes" / "behavior.hkx").is_file())
         self.assertTrue((self.root / "overwrite" / "Engine.log").is_file())
 
+    def test_pandora_run_adds_new_codes_active_to_saved_cache(self):
+        for code in ("colis", "newanim"):
+            (self.root / "mods" / "ModA" / "Nemesis_Engine" / "mod" / code).mkdir(parents=True)
+            (self.root / "mods" / "ModA" / "Nemesis_Engine" / "mod" / code / "info.ini").write_text("name=x\n", encoding="utf-8")
+        cache = self.exe.parent / "Pandora_Engine" / "ActiveMods.json"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps([{"code": "colis", "active": False, "priority": 4}]), encoding="utf-8")
+        plan = toolwrap.pandora_run(self.instance, None, exe=str(self.exe), dry_run=True)
+        self.assertEqual(plan["active_mods_added"], ["newanim"])
+        self.assertEqual(json.loads(cache.read_text(encoding="utf-8")), [{"code": "colis", "active": False, "priority": 4}])
+        with patch("mo2cli.toolwrap.run_vfs", return_value={"returncode": 0}):
+            result = toolwrap.pandora_run(self.instance, None, exe=str(self.exe))
+        self.assertEqual(result["active_mods_added"], ["newanim"])
+        self.assertEqual(
+            json.loads(cache.read_text(encoding="utf-8")),
+            [{"code": "colis", "active": False, "priority": 4}, {"code": "newanim", "active": True, "priority": 5}],
+        )
+
     def test_cli_dry_runs_need_no_lock(self):
         with patch("mo2cli.safety._running_process_names", return_value={"modorganizer.exe"}):
             for argv in (

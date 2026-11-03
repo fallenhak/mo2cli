@@ -664,6 +664,31 @@ def write_pandora_active_mods(path: Path, codes: list[str]) -> None:
     path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
 
 
+def _read_json_list(path: Path) -> list[dict]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return []
+    return [entry for entry in data if isinstance(entry, dict)] if isinstance(data, list) else []
+
+
+def add_pandora_active_mods(path: Path, codes: list[str]) -> list[str]:
+    """Append installed codes missing from a saved ActiveMods.json as active (Pandora itself would add them
+    inactive, so a headless --auto_run would silently skip newly installed patches). Saved entries keep
+    their state and priority. Returns the added codes; an unreadable file is left alone."""
+    entries = _read_json_list(path)
+    if not entries:
+        return []
+    known = {str(entry.get("code", "")).casefold() for entry in entries}
+    added = [code for code in codes if code.casefold() not in known]
+    if added:
+        priority = max((int(entry.get("priority", 0) or 0) for entry in entries), default=0)
+        for offset, code in enumerate(added, 1):
+            entries.append({"code": code, "active": True, "priority": priority + offset})
+        path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+    return added
+
+
 def pandora_run(
     instance: Instance,
     profile: str | None,
@@ -700,6 +725,11 @@ def pandora_run(
             result["active_mods_created"] = codes
             if not dry_run:
                 write_pandora_active_mods(cache, codes)
+        elif dry_run:
+            saved = {str(entry.get("code", "")).casefold() for entry in _read_json_list(cache)}
+            result["active_mods_added"] = [code for code in pandora_mod_codes(instance, profile) if code.casefold() not in saved]
+        else:
+            result["active_mods_added"] = add_pandora_active_mods(cache, pandora_mod_codes(instance, profile))
     if dry_run:
         return result
     return _run_generator(instance, profile, binary, arguments, result, output_mod, capture_to or output_mod, usvfs_dir, None, _PANDORA_RUN_FILES)
