@@ -34,6 +34,13 @@ class SafetyTests(unittest.TestCase):
                         pass
             self.assertFalse((self.instance.base / ".mo2cli.lock").exists())
 
+    def test_downloads_fetch_takes_no_instance_lock(self):
+        from mo2cli.cli import build_parser, _mutates_instance
+
+        parser = build_parser()
+        self.assertFalse(_mutates_instance(parser.parse_args(["downloads", "fetch", "https://example.com/a.zip"])))
+        self.assertTrue(_mutates_instance(parser.parse_args(["downloads", "sync"])))
+
     def test_mutation_guard_recovers_stale_lock(self):
         lock_path = self.instance.base / ".mo2cli.lock"
         lock_path.write_text(json.dumps({"pid": 99999999, "token": "stale"}), encoding="utf-8")

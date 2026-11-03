@@ -1095,7 +1095,9 @@ def _mutates_instance(args: argparse.Namespace) -> bool:
     if command == "downloads":
         if args.downloads_command == "meta":
             return not args.dry_run
-        return args.downloads_command in {"sync", "mark-installed", "fetch"}
+        # fetch only writes its own archive + .meta in downloads/ (via a per-process .part), so it neither
+        # takes the instance lock nor needs MO2 closed; long downloads must not block other commands.
+        return args.downloads_command in {"sync", "mark-installed"}
     if command == "mo2plugin":
         return args.mo2plugin_command in {"install", "remove"} and not args.dry_run
     if command == "manifest":

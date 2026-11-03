@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import urllib.parse
@@ -346,7 +347,8 @@ def fetch(instance: Instance, url: str, output: str | None = None, replace: bool
     if target.exists() and not replace:
         raise Mo2Error(f"Download already exists: {target}; use --replace to overwrite.")
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(target.suffix + ".part")
+    # Per-process name: fetch runs without the instance lock, so parallel downloads must not share a .part.
+    temporary = target.with_name(f"{target.name}.{os.getpid()}.part")
     try:
         request = urllib.request.Request(request_url, headers=headers or {}, method="GET")
         with urllib.request.urlopen(request, timeout=120) as response, temporary.open("wb") as destination:
