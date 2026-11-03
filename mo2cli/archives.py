@@ -227,8 +227,26 @@ def _safe_extract_py7zr(path: Path, destination: Path) -> None:
         raise Mo2Error(f"7z archive extraction failed: {error}") from error
 
 
+_MAGIC = ((b"PK\x03\x04", ".zip"), (b"PK\x05\x06", ".zip"), (b"Rar!\x1a\x07", ".rar"), (b"7z\xbc\xaf\x27\x1c", ".7z"))
+
+
+def _format_name(path: Path) -> str:
+    """Lower-cased name whose extension reflects the real format: Nexus uploads like
+    ``KittyVFX - ENBHands ... .zip`` are RAR files, so the signature wins over the suffix."""
+    name = path.name.casefold()
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(8)
+    except OSError:
+        return name
+    for magic, extension in _MAGIC:
+        if head.startswith(magic):
+            return name if name.endswith(extension) else name + extension
+    return name
+
+
 def extract_archive(path: Path, destination: Path) -> None:
-    suffix = path.name.casefold()
+    suffix = _format_name(path)
     records = list_archive(path)
     _validate_expansion(records, destination)
     if suffix.endswith(".zip"):
@@ -260,7 +278,7 @@ def extract_archive(path: Path, destination: Path) -> None:
 
 
 def list_archive(path: Path) -> list[dict[str, object]]:
-    suffix = path.name.casefold()
+    suffix = _format_name(path)
     if suffix.endswith(".zip"):
         with zipfile.ZipFile(path) as archive:
             return [{"name": info.filename, "size": info.file_size, "compressed": info.compress_size, "directory": info.is_dir()} for info in archive.infolist()]
