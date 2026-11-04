@@ -552,6 +552,20 @@ class FeatureTests(unittest.TestCase):
         issues = analyze_plugins(self.instance, "Default")
         self.assertTrue(any(issue["code"] == "missing-master" for issue in issues))
 
+    def test_plugin_sync_ignores_plugins_in_mod_subfolders(self):
+        mod = self.root / "mods" / "Patch Mod"
+        (mod / "Armor.esl").write_bytes(b"root plugin")
+        (mod / "esp").mkdir()
+        (mod / "esp" / "Armor.esp").write_bytes(b"alternate plugin the game never sees")
+        profile = self.root / "profiles" / "Default"
+        (profile / "plugins.txt").write_text("*Skyrim.esm\n*Test.esp\n", encoding="utf-8")
+        (profile / "loadorder.txt").write_text("Skyrim.esm\nTest.esp\n", encoding="utf-8")
+
+        result = sync_plugin_lists(self.instance, "Default")
+
+        self.assertIn("Armor.esl", result["added"])
+        self.assertNotIn("Armor.esp", result["added"])
+
     def test_plugin_sync_preserves_existing_disabled_state(self):
         plugin = self.root / "mods" / "Patch Mod" / "Disabled.esp"
         plugin.write_bytes(b"not needed for sync")

@@ -76,8 +76,9 @@ def _active_plugin_files(instance: Instance, profile: str | None) -> dict[str, P
     if instance.game_path and instance.game_path.is_dir():
         game_data = instance.game_path / "Data"
         roots.append(game_data if game_data.is_dir() else instance.game_path)
+    # The game only loads plugins from the top of Data; alternates in mod subfolders (e.g. "esp/") are not plugins.
     for root in roots:
-        for path in root.rglob("*"):
+        for path in root.iterdir():
             if path.is_file() and path.suffix.casefold() in {".esm", ".esp", ".esl"}:
                 result.setdefault(path.name.casefold(), path)
     return result
