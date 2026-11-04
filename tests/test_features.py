@@ -821,6 +821,13 @@ class FeatureTests(unittest.TestCase):
             [str(binary), "--tesv", "C:/Game Root", "--output", "C:/Pandora Output", "--extra"],
         )
 
+    def test_bodyslide_finds_executable_registered_as_bodyslide_x64(self):
+        binary = self.root / "BodySlide x64.exe"
+        binary.write_bytes(b"test")
+        register_executable(self.instance, "BodySlide x64", str(binary))
+        result = run_bodyslide(self.instance, "Default", "CBBE Curvy", ["3BA"], dry_run=True)
+        self.assertEqual(Path(str(result["binary"])), binary)
+
     def test_bodyslide_dry_run_builds_official_command_line(self):
         with patch(
             "mo2cli.tool_workflows.find_executable",

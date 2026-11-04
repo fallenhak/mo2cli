@@ -12,6 +12,8 @@ from .workspace import Instance, Mo2Error, _safe_name
 
 PANDORA_TITLE = "Pandora Behaviour Engine+"
 BODYSLIDE_TITLE = "BodySlide"
+# MO2 and Wabbajack lists usually register the 64-bit build as "BodySlide x64".
+BODYSLIDE_TITLES = ("BodySlide x64", "BodySlide")
 
 
 def _find_mod_dir(instance: Instance, name: str) -> Path | None:
@@ -154,6 +156,16 @@ def run_pandora(
     return result
 
 
+def _find_first_executable(instance: Instance, titles: tuple[str, ...]) -> dict[str, object]:
+    errors: list[str] = []
+    for title in titles:
+        try:
+            return find_executable(instance, title)
+        except Mo2Error as error:
+            errors.append(str(error))
+    raise Mo2Error("; ".join(errors))
+
+
 def run_bodyslide(
     instance: Instance,
     profile: str | None,
@@ -171,7 +183,7 @@ def run_bodyslide(
     cleaned_groups = [item.strip() for item in groups if item.strip()]
     if not cleaned_groups:
         raise Mo2Error("At least one --group is required for BodySlide.")
-    executable = find_executable(instance, BODYSLIDE_TITLE)
+    executable = _find_first_executable(instance, BODYSLIDE_TITLES)
     binary = Path(str(executable["binary"]))
     output_path = instance.mods_dir / output_mod
     args: list[str] = ["--groupbuild", ",".join(cleaned_groups), "--targetdir", str(output_path), "--preset", preset]
